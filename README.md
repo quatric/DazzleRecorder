@@ -25,7 +25,40 @@ see [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md).
 
 Prebuilt macOS, Windows and Linux builds are on the
 [Releases](https://github.com/quatric/DazzleRecorder/releases) page. Each archive contains the command line
-tool `dvc100-capture` and the GUI `Dazzle Capture`.
+tool `dvc100-capture` and the GUI `Dazzle Capture` (a live preview with sound, input selection and recording;
+see [Dazzle Capture (app)](#dazzle-capture-app)).
+
+### macOS
+
+Download `DazzleRecorder-macos-arm64-app.zip` (Apple Silicon), unzip it and open **Dazzle Capture**. The app
+is ad-hoc signed, not notarized, so the first time right-click it and choose **Open** (or allow it under
+System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle. Recording needs
+`brew install ffmpeg`. `DazzleRecorder-macos-arm64.tar.gz` also contains the command line tool.
+
+### Windows
+
+1. Download the zip for your machine: `x86_64-windows-gnu` for most PCs, `x86-windows-gnu` for 32-bit,
+   `aarch64-windows-gnu` for Arm.
+2. Install the WinUSB driver for the Dazzle with [Zadig](https://zadig.akeo.ie): plug the device in, pick it in
+   the list (options → List All Devices), choose **WinUSB** and click Install Driver. This replaces the vendor
+   driver for that device.
+3. Install [ffmpeg](https://ffmpeg.org/download.html) and put it on your `PATH` for recording.
+4. Run `Dazzle Capture.exe`. Windows SmartScreen may warn about an unsigned app: choose More info → Run anyway.
+
+### Linux
+
+1. Download the tarball for your machine (`x86_64-linux-gnu`, `aarch64-linux-gnu`, `x86-linux-gnu` or
+   `arm-linux-gnueabihf`; the `musl` builds are for distributions without glibc, such as Alpine) and extract it.
+2. Allow access to the USB device with a udev rule, then replug the device:
+
+   ```bash
+   echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2304", MODE="0666"
+   SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", MODE="0666"' | sudo tee /etc/udev/rules.d/99-dazzle.rules
+   sudo udevadm control --reload-rules
+   ```
+
+3. Install `ffmpeg` for recording (and ALSA for sound, which is present on most desktops).
+4. Run `./"Dazzle Capture"`. The GUI uses X11 and also runs under XWayland.
 
 ## Build (macOS)
 
