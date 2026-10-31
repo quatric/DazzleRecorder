@@ -25,6 +25,7 @@ struct app {
     dvc100_t *dev;
     int w, h, pal;
     volatile int deinterlace;
+    volatile int widescreen;
 
     pthread_mutex_t frame_lock;
     uint32_t *rgb, *spare; /* latest preview frame and the one being converted */
@@ -247,6 +248,7 @@ int app_height(app_t *a) { return a->h; }
 int app_is_pal(app_t *a) { return a->pal; }
 void app_set_input(app_t *a, dvc100_input_t input) { dvc100_set_input(a->dev, input); }
 void app_set_deinterlace(app_t *a, int on) { a->deinterlace = on; }
+void app_set_widescreen(app_t *a, int on) { a->widescreen = on; }
 
 /* ---- files ---- */
 
@@ -437,6 +439,7 @@ int app_record_start(app_t *a, const char *folder, int quality, int deinterlace,
         .height = a->h,
         .pal = a->pal,
         .deinterlace = deinterlace,
+        .widescreen = a->widescreen,
         .video_kbps = kbps[quality < 0 ? 0 : quality > 2 ? 2 : quality],
         .audio_kbps = 224,
         .audio_rate = a->audio_rate,
@@ -593,8 +596,8 @@ static int write_png(const char *path, const uint8_t *rgb, int w, int h)
 
 int app_snapshot(app_t *a, const char *folder, char *path, int pathlen, char *err, int errlen)
 {
-    /* 720 BT.601 samples span a 4:3 picture: resample to square pixels */
-    const int ow = a->pal ? 768 : 640, oh = a->h;
+    /* 720 BT.601 samples span a 4:3 picture: resample to square pixels (or stretch to 16:9) */
+    const int oh = a->h, ow = a->widescreen ? oh * 16 / 9 / 2 * 2 : a->pal ? 768 : 640;
     uint32_t *src = malloc((size_t)a->w * a->h * 4);
     uint8_t *dst = malloc((size_t)ow * oh * 3);
     uint64_t seq = (uint64_t)-1;

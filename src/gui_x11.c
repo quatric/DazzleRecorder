@@ -111,7 +111,7 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_MONITOR, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_MONITOR, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -131,7 +131,7 @@ static struct {
     int sw, sh;
     void *img;
     int dirty_picture, dirty_bar;
-    int svideo, deint, monitor, quality;
+    int svideo, deint, wide, monitor, quality;
     char folder[1024];
     char status[600];
     double level[2];
@@ -297,6 +297,13 @@ static void press(int b)
         app_set_deinterlace(G.app, G.deint);
         app_set_setting_int("deinterlace", G.deint);
         break;
+    case B_WIDE:
+        if (rec)
+            break;
+        G.wide = !G.wide;
+        app_set_widescreen(G.app, G.wide);
+        app_set_setting_int("widescreen", G.wide);
+        break;
     case B_MONITOR:
         G.monitor = !G.monitor;
         app_set_monitor(G.app, G.monitor);
@@ -333,10 +340,10 @@ static void picture_rect(int *x, int *y, int *w, int *h)
 {
     int aw = G.w, ah = area_h();
     *w = aw;
-    *h = aw * 3 / 4;
+    *h = G.wide ? aw * 9 / 16 : aw * 3 / 4;
     if (*h > ah) {
         *h = ah;
-        *w = ah * 4 / 3;
+        *w = G.wide ? ah * 16 / 9 : ah * 4 / 3;
     }
     *x = (aw - *w) / 2;
     *y = (ah - *h) / 2;
@@ -433,6 +440,8 @@ static void draw_bar(void)
     x += 126;
     button(d, B_DEINT, x, 6, 100, G.deint ? "Deinterlace" : "Interlaced", G.deint, !rec);
     x += 106;
+    button(d, B_WIDE, x, 6, 84, G.wide ? "Widescreen" : "4:3", G.wide, !rec);
+    x += 90;
     button(d, B_MONITOR, x, 6, 76, G.monitor ? "Monitor" : "Muted", G.monitor, 1);
     x += 82;
     button(d, B_QUALITY, x, 6, 84, QUALITY_NAME[G.quality], 0, !rec);
@@ -559,6 +568,7 @@ int main(int argc, char **argv)
     }
     G.svideo = input == DVC100_INPUT_SVIDEO;
     G.deint = app_setting_int("deinterlace", 1);
+    G.wide = app_setting_int("widescreen", 0);
     G.monitor = app_setting_int("monitor", 1);
     G.quality = app_setting_int("quality", 1);
     if (G.quality < 0 || G.quality > 2)
@@ -567,6 +577,7 @@ int main(int argc, char **argv)
     if (!G.folder[0])
         app_default_folder(G.folder, sizeof(G.folder));
     app_set_deinterlace(G.app, G.deint);
+    app_set_widescreen(G.app, G.wide);
     app_set_monitor(G.app, G.monitor);
     set_status(app_audio_problem(G.app));
 
@@ -574,7 +585,7 @@ int main(int argc, char **argv)
     G.root = p_XRootWindow(G.dpy, G.scr);
     G.depth = p_XDefaultDepth(G.dpy, G.scr);
     G.visual = p_XDefaultVisual(G.dpy, G.scr);
-    G.w = 800;
+    G.w = 880;
     G.h = 600 + BAR_H;
     G.wnd = p_XCreateSimpleWindow(G.dpy, G.root, 0, 0, (unsigned)G.w, (unsigned)G.h, 0, 0, 0);
     G.gc = p_XCreateGC(G.dpy, G.wnd, 0, NULL);

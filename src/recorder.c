@@ -529,7 +529,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
         A("-flags"); A("+ilme+ildct"); A("-alternate_scan"); A("1");
     }
     A("-c:v"); A("mpeg2video"); A("-b:v"); A(vk); A("-maxrate"); A(maxk); A("-bufsize"); A("1835k");
-    A("-g"); A(gop); A("-bf"); A("2"); A("-aspect"); A("4:3");
+    A("-g"); A(gop); A("-bf"); A("2"); A("-aspect"); A(r->o.widescreen ? "16:9" : "4:3");
     A("-c:a"); A("mp2"); A("-b:a"); A(ak);
     A("-f"); A("dvd"); A(path);
     A(NULL);

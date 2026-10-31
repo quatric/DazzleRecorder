@@ -25,6 +25,7 @@ int app_height(app_t *a);
 int app_is_pal(app_t *a);
 void app_set_input(app_t *a, dvc100_input_t input);
 void app_set_deinterlace(app_t *a, int on); /* preview line blend; recording uses yadif */
+void app_set_widescreen(app_t *a, int on);  /* 16:9 instead of 4:3 for recordings and snapshots */
 void app_set_monitor(app_t *a, int on);     /* play the input through the speakers */
 const char *app_audio_problem(app_t *a);    /* NULL when audio works */
 

@@ -111,10 +111,10 @@ static void mpeg_frame(const dvc100_frame_t *f, void *user) { rec_video(user, f-
 static void mpeg_audio(const int16_t *s, int frames, void *user) { rec_audio(user, s, frames); }
 
 static int record_mpeg2(dvc100_t *dev, const char *path, int w, int h, int pal, int deinterlace,
-                        int kbps, long count)
+                        int widescreen, int kbps, long count)
 {
     int rate = 48000;
-    recorder_opts_t o = { .width = w, .height = h, .pal = pal, .deinterlace = deinterlace,
+    recorder_opts_t o = { .width = w, .height = h, .pal = pal, .deinterlace = deinterlace, .widescreen = widescreen,
                           .video_kbps = kbps, .audio_rate = rate };
     char err[256];
     recorder_t *rec = rec_open(path, &o, err, sizeof(err));
@@ -157,6 +157,7 @@ static void usage(const char *argv0)
             "  -c, --count N                  stop after N frames\n"
             "  -m, --mpeg2 FILE.mpg           record video+audio as DVD-compatible MPEG-2\n"
             "  -d, --deinterlace              deinterlace the MPEG-2 recording (default: interlaced)\n"
+            "  -w, --widescreen               stretch the MPEG-2 recording to 16:9 (default: 4:3)\n"
             "  -b, --bitrate KBPS             MPEG-2 video bitrate (default 8000)\n"
             "  -a, --audio FILE.wav           also record the audio input (48 kHz stereo)\n"
             "      --audio-only               record audio only (with -a), until Ctrl-C or -t\n"
@@ -174,7 +175,7 @@ int main(int argc, char **argv)
     int raw = 0, info_only = 0, verbose = 0;
     long count = -1;
     const char *outpath = "-", *audiopath = NULL;
-    int audio_only = 0, deinterlace = 0, kbps = 0;
+    int audio_only = 0, deinterlace = 0, widescreen = 0, kbps = 0;
     const char *mpegpath = NULL;
     double seconds = 0;
     int picture[4] = { -1, -1, -1, -1 };
@@ -189,6 +190,7 @@ int main(int argc, char **argv)
         { "audio", required_argument, NULL, 'a' },
         { "mpeg2", required_argument, NULL, 'm' },
         { "deinterlace", no_argument, NULL, 'd' },
+        { "widescreen", no_argument, NULL, 'w' },
         { "bitrate", required_argument, NULL, 'b' },
         { "audio-only", no_argument, NULL, OPT_AUDIO_ONLY },
         { "time", required_argument, NULL, 't' },
@@ -202,7 +204,7 @@ int main(int argc, char **argv)
         { 0 },
     };
     int c;
-    while ((c = getopt_long(argc, argv, "i:n:f:o:c:a:m:db:t:vh", opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "i:n:f:o:c:a:m:dwb:t:vh", opts, NULL)) != -1) {
         switch (c) {
         case 'i':
             if (!strcmp(optarg, "svideo") || !strcmp(optarg, "s-video"))
@@ -230,6 +232,7 @@ int main(int argc, char **argv)
         case 'a': audiopath = optarg; break;
         case 'm': mpegpath = optarg; break;
         case 'd': deinterlace = 1; break;
+        case 'w': widescreen = 1; break;
         case 'b': kbps = atoi(optarg); break;
         case 't': seconds = atof(optarg); break;
         case OPT_AUDIO_ONLY: audio_only = 1; break;
@@ -300,7 +303,7 @@ int main(int argc, char **argv)
     }
 
     if (mpegpath)
-        return record_mpeg2(dev, mpegpath, w, h, pal, deinterlace, kbps, count);
+        return record_mpeg2(dev, mpegpath, w, h, pal, deinterlace, widescreen, kbps, count);
 
     wav_t wav = { .f = NULL };
     pthread_mutex_init(&wav.lock, NULL);

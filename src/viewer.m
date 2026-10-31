@@ -15,11 +15,12 @@
 #include "dvc100.h"
 #include "recorder.h"
 
-/* ---- preview view: keeps the picture at 4:3 inside whatever space it has ---- */
+/* ---- preview view: keeps the picture at 4:3 (or stretched to 16:9) inside whatever space it has ---- */
 
 @interface DVCPreview : NSView
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *displayLayer;
 @property(nonatomic, strong) NSTextField *badge;
+@property(nonatomic) BOOL widescreen;
 @end
 
 @implementation DVCPreview
@@ -29,7 +30,7 @@
         self.wantsLayer = YES;
         self.layer.backgroundColor = NSColor.blackColor.CGColor;
         _displayLayer = [AVSampleBufferDisplayLayer layer];
-        /* 720 BT.601 samples span a 4:3 picture, so stretch into a 4:3 rect */
+        /* 720 BT.601 samples span a 4:3 picture, so stretch into a 4:3 (or 16:9) rect */
         _displayLayer.videoGravity = AVLayerVideoGravityResize;
         [self.layer addSublayer:_displayLayer];
 
@@ -44,14 +45,20 @@
     return self;
 }
 - (BOOL)isFlipped { return YES; }
+- (void)setWidescreen:(BOOL)on
+{
+    _widescreen = on;
+    [self setNeedsLayout:YES];
+}
 - (void)layout
 {
     [super layout];
     NSSize s = self.bounds.size;
-    CGFloat w = s.width, h = w * 3 / 4;
+    CGFloat ar = _widescreen ? 16.0 / 9 : 4.0 / 3;
+    CGFloat w = s.width, h = w / ar;
     if (h > s.height) {
         h = s.height;
-        w = h * 4 / 3;
+        w = h * ar;
     }
     NSRect r = NSMakeRect((s.width - w) / 2, (s.height - h) / 2, w, h);
     [CATransaction begin];
@@ -81,6 +88,8 @@ static volatile int g_peak[2];
     CVPixelBufferPoolRef _pool;
     int _width, _height, _pal;
     volatile int _deinterlace;
+    int _widescreen;
+    NSLayoutConstraint *_aspectConstraint;
     AVAudioEngine *_engine;
     CVPixelBufferRef _lastFrame;
     NSLock *_lastLock;
@@ -92,7 +101,7 @@ static volatile int g_peak[2];
     int _recDeinterlaced;
 
     NSPopUpButton *_inputPopup, *_qualityPopup;
-    NSButton *_deintCheck, *_monitorCheck, *_recordButton, *_folderButton;
+    NSButton *_deintCheck, *_wideCheck, *_monitorCheck, *_recordButton, *_folderButton;
     NSTextField *_timeLabel, *_statusLabel;
     NSLevelIndicator *_meterL, *_meterR;
     NSTimer *_uiTimer;
@@ -192,12 +201,13 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _lastLock = [NSLock new];
     _recLock = OS_UNFAIR_LOCK_INIT;
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
-    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"quality" : @1, @"monitor" : @YES }];
+    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES }];
     NSString *folder = [ud stringForKey:@"folder"];
     _folder = folder ? [NSURL fileURLWithPath:folder]
                      : [NSFileManager.defaultManager URLsForDirectory:NSMoviesDirectory
                                                             inDomains:NSUserDomainMask].firstObject;
     _deinterlace = [ud boolForKey:@"deinterlace"];
+    _widescreen = [ud boolForKey:@"widescreen"];
     dvc100_input_t input = [ud integerForKey:@"input"] == 1 ? DVC100_INPUT_SVIDEO : DVC100_INPUT_COMPOSITE;
 
     dvc100_norm_t norm = DVC100_NORM_AUTO;
@@ -292,6 +302,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _deintCheck.state = _deinterlace ? NSControlStateValueOn : NSControlStateValueOff;
     _deintCheck.toolTip = @"Preview and recording. Off records interlaced MPEG-2, as on a DVD.";
 
+    _wideCheck = [NSButton checkboxWithTitle:@"Widescreen" target:self action:@selector(widescreenChanged:)];
+    _wideCheck.state = _widescreen ? NSControlStateValueOn : NSControlStateValueOff;
+    _wideCheck.toolTip = @"Stretch the picture to 16:9 in the preview, snapshots and recordings.";
+
     _qualityPopup = [NSPopUpButton new];
     [_qualityPopup addItemsWithTitles:@[ @"Standard (6 Mbit/s)", @"High (8 Mbit/s)", @"Maximum (9.5 Mbit/s)" ]];
     [_qualityPopup selectItemAtIndex:[NSUserDefaults.standardUserDefaults integerForKey:@"quality"]];
@@ -306,12 +320,12 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [self updateFolderButton];
 
     NSStackView *row1 = [NSStackView stackViewWithViews:@[
-        [self label:@"Input"], _inputPopup, _deintCheck, [self label:@"Quality"], _qualityPopup,
+        [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, [self label:@"Quality"], _qualityPopup,
         [self label:@"Save to"], _folderButton
     ]];
     row1.spacing = 8;
     [row1 setCustomSpacing:16 afterView:_inputPopup];
-    [row1 setCustomSpacing:16 afterView:_deintCheck];
+    [row1 setCustomSpacing:16 afterView:_wideCheck];
     [row1 setCustomSpacing:16 afterView:_qualityPopup];
 
     /* row 2: record button, time, meters, monitor */
@@ -368,11 +382,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         [bar.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
         [bar.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
         [bar.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
-        /* the picture is always 4:3; the window grows and shrinks around it */
-        [_preview.heightAnchor constraintEqualToAnchor:_preview.widthAnchor multiplier:3.0 / 4.0],
         [_preview.widthAnchor constraintGreaterThanOrEqualToConstant:720],
     ]];
     [bar setHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
+    _preview.widescreen = _widescreen;
+    [self applyAspect];
     _window.contentView = content;
     [self updateTitle];
     [_window center];
@@ -435,6 +449,23 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     dvc100_set_input(_dev, in);
     [NSUserDefaults.standardUserDefaults setInteger:_inputPopup.indexOfSelectedItem forKey:@"input"];
     [self updateTitle];
+}
+
+/* the picture is 4:3 or 16:9; the window grows and shrinks around it */
+- (void)applyAspect
+{
+    _aspectConstraint.active = NO;
+    _aspectConstraint = [_preview.heightAnchor constraintEqualToAnchor:_preview.widthAnchor
+                                                            multiplier:_widescreen ? 9.0 / 16 : 3.0 / 4];
+    _aspectConstraint.active = YES;
+}
+
+- (void)widescreenChanged:(id)sender
+{
+    _widescreen = _wideCheck.state == NSControlStateValueOn;
+    [NSUserDefaults.standardUserDefaults setBool:_widescreen forKey:@"widescreen"];
+    _preview.widescreen = _widescreen;
+    [self applyAspect];
 }
 
 - (void)deinterlaceChanged:(id)sender
@@ -507,6 +538,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         .height = _height,
         .pal = _pal,
         .deinterlace = _deinterlace,
+        .widescreen = _widescreen,
         .video_kbps = kbps[MAX(0, MIN(2, (int)_qualityPopup.indexOfSelectedItem))],
         .audio_kbps = 224,
         .audio_rate = g_audio_rate,
@@ -529,7 +561,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
     _recordButton.title = @"Stop";
     _recordButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle.fill" accessibilityDescription:nil];
-    _deintCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = NO;
+    _deintCheck.enabled = _wideCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = NO;
     _preview.badge.hidden = NO;
     [self setStatus:[NSString stringWithFormat:@"Recording %@ MPEG-2 to %@",
                                                o.deinterlace ? @"deinterlaced" : @"interlaced", name]];
@@ -555,7 +587,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
             self->_recordButton.title = @"Record";
             self->_recordButton.image = [NSImage imageWithSystemSymbolName:@"record.circle"
                                                   accessibilityDescription:nil];
-            self->_deintCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = YES;
+            self->_deintCheck.enabled = self->_wideCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = YES;
             self->_preview.badge.hidden = YES;
             if (r == 0) {
                 [self setStatus:[@"Saved " stringByAppendingString:path.lastPathComponent]];
@@ -603,7 +635,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     if (!pb)
         return;
     CIImage *img = [CIImage imageWithCVPixelBuffer:pb];
-    img = [img imageByApplyingTransform:CGAffineTransformMakeScale(640.0 / _width, 480.0 / _height)];
+    img = [img imageByApplyingTransform:CGAffineTransformMakeScale((_widescreen ? 854.0 : 640.0) / _width, 480.0 / _height)];
     CIContext *ctx = [CIContext context];
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";

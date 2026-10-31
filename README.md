@@ -78,13 +78,15 @@ On macOS run `open "build/Dazzle Capture.app"`; on Windows and Linux run the `Da
 The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live preview with sound, and a control bar for:
 
 * **Input**: Composite or S-Video
+* **Widescreen**: off by default. Stretches the picture to 16:9 in the preview, snapshots and recordings
+  (the MPEG-2 file is flagged 16:9, so players stretch it too). Use it for tapes recorded in anamorphic widescreen.
 * **Deinterlace**: applies to the preview and the recording. Off records interlaced
   MPEG-2 (top field first) like a DVD, which is best for burning a DVD later. On
   uses ffmpeg's yadif and suits computer playback and editing.
 * **Quality**: 6, 8 or 9.5 Mbit/s MPEG-2 video (DVD-legal), 224 kbit/s MP2 stereo audio
 * **Save to**: recording folder (default: your Movies or Videos folder)
 * **Record / Stop** (⌘R on macOS): writes `Dazzle Capture <date>.mpg`, a DVD-compatible
-  MPEG-2 program stream with a 4:3 display aspect
+  MPEG-2 program stream with a 4:3 display aspect (16:9 with Widescreen)
 * L/R audio meters, **Play audio** to monitor through the speakers, ⌘S saves a PNG snapshot
 
 Audio is the master clock while recording. If video frames go missing (signal loss,
@@ -126,7 +128,7 @@ Audio only:
 build/dvc100-capture --audio-only -a tape.wav
 ```
 
-Options: `-i composite|svideo`, `-n auto|ntsc|pal`, `-f y4m|yuyv`, `-o FILE`,
+Options: `-w` (stretch the MPEG-2 recording to 16:9), `-i composite|svideo`, `-n auto|ntsc|pal`, `-f y4m|yuyv`, `-o FILE`,
 `-c FRAMES`, `-t SECONDS`, `-m FILE.mpg`, `-d`, `-b KBPS`, `-a FILE.wav`, `--audio-only`, `--brightness/--contrast/--saturation/--hue 0..255`, `-v`/`-vv`
 for register traces.
 

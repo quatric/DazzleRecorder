@@ -13,6 +13,7 @@ typedef struct {
     int width, height;     /* 720x480 or 720x576 */
     int pal;               /* 25 fps instead of 29.97 */
     int deinterlace;       /* 1 = yadif, encode progressive; 0 = keep interlaced */
+    int widescreen;        /* 1 = flag the picture as 16:9 instead of 4:3 */
     int video_kbps;        /* 0 = 8000 */
     int audio_kbps;        /* 0 = 224 */
     int audio_rate;        /* 0 = 48000 */

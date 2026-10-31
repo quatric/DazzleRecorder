@@ -21,7 +21,7 @@
 #include "app_core.h"
 
 enum {
-    ID_INPUT = 100, ID_DEINT, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_TIME, ID_STATUS, ID_METER_L,
+    ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_TIME, ID_STATUS, ID_METER_L,
     ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R,
     IDM_RECORD = 200, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
     TIMER_FRAME = 1, TIMER_UI = 2,
@@ -31,7 +31,7 @@ enum {
 static struct {
     HINSTANCE inst;
     HWND wnd, preview;
-    HWND input, deint, quality, folder_btn, record, monitor, time, status, meter[2];
+    HWND input, deint, wide, quality, folder_btn, record, monitor, time, status, meter[2];
     HWND labels[5];
     HFONT font, time_font, badge_font;
     HBRUSH bar_brush;
@@ -98,13 +98,16 @@ static void update_folder_button(void)
 
 /* ---- preview ---- */
 
+static int app_widescreen_on; /* mirrors the Widescreen checkbox for the paint code */
+
 static RECT picture_rect(RECT c)
 {
     int cw = c.right - c.left, ch = c.bottom - c.top;
-    int w = cw, h = cw * 3 / 4;
+    int wide = G.app && app_widescreen_on;
+    int w = cw, h = wide ? cw * 9 / 16 : cw * 3 / 4;
     if (h > ch) {
         h = ch;
-        w = ch * 4 / 3;
+        w = wide ? ch * 16 / 9 : ch * 4 / 3;
     }
     RECT r = { c.left + (cw - w) / 2, c.top + (ch - h) / 2, 0, 0 };
     r.right = r.left + w;
@@ -201,13 +204,13 @@ static void layout(void)
     MoveWindow(G.preview, 0, 0, c.right, c.bottom - bar, TRUE);
     int x = S(12), lh = S(20), ch = S(24);
     struct { HWND h; int w, dy, hh; } row1[] = {
-        { G.labels[0], 40, 3, 20 }, { G.input, 110, 0, 200 }, { G.deint, 110, 2, 20 },
+        { G.labels[0], 40, 3, 20 }, { G.input, 110, 0, 200 }, { G.deint, 100, 2, 20 }, { G.wide, 100, 2, 20 },
         { G.labels[1], 52, 3, 20 }, { G.quality, 170, 0, 200 }, { G.labels[2], 56, 3, 20 },
         { G.folder_btn, 220, -1, 26 },
     };
     for (size_t i = 0; i < sizeof(row1) / sizeof(row1[0]); i++) {
         MoveWindow(row1[i].h, x, y1 + S(row1[i].dy), S(row1[i].w), S(row1[i].hh), TRUE);
-        x += S(row1[i].w) + S(i == 1 || i == 2 || i == 4 ? 16 : 6);
+        x += S(row1[i].w) + S(i == 1 || i == 3 || i == 5 ? 16 : 6);
     }
     x = S(12);
     MoveWindow(G.record, x, y2, S(110), S(28), TRUE);
@@ -242,6 +245,7 @@ static void build_controls(void)
     SendMessageW(G.input, CB_ADDSTRING, 0, (LPARAM)L"Composite");
     SendMessageW(G.input, CB_ADDSTRING, 0, (LPARAM)L"S-Video");
     G.deint = make(L"BUTTON", L"Deinterlace", BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEINT);
+    G.wide = make(L"BUTTON", L"Widescreen", BS_AUTOCHECKBOX | WS_TABSTOP, ID_WIDE);
     G.labels[1] = make(L"STATIC", L"Quality", 0, ID_LBL_QUALITY);
     G.quality = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, ID_QUALITY);
     SendMessageW(G.quality, CB_ADDSTRING, 0, (LPARAM)L"Standard (6 Mbit/s)");
@@ -337,6 +341,7 @@ static void set_recording_ui(int recording)
 {
     SetWindowTextW(G.record, recording ? L"\x25A0  Stop" : L"\x25CF  Record");
     EnableWindow(G.deint, !recording);
+    EnableWindow(G.wide, !recording);
     EnableWindow(G.quality, !recording);
     EnableWindow(G.folder_btn, !recording);
     ModifyMenuW(G.menu, IDM_RECORD, MF_BYCOMMAND | MF_STRING, IDM_RECORD,
@@ -393,7 +398,7 @@ static void snapshot(void)
 static void toggle_fullscreen(void)
 {
     DWORD style = (DWORD)GetWindowLongW(G.wnd, GWL_STYLE);
-    HWND bar[] = { G.input, G.deint, G.quality, G.folder_btn, G.record, G.monitor, G.time, G.status,
+    HWND bar[] = { G.input, G.deint, G.wide, G.quality, G.folder_btn, G.record, G.monitor, G.time, G.status,
                    G.meter[0], G.meter[1], G.labels[0], G.labels[1], G.labels[2], G.labels[3], G.labels[4] };
     G.fullscreen = !G.fullscreen;
     for (size_t i = 0; i < sizeof(bar) / sizeof(bar[0]); i++)
@@ -485,6 +490,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             int on = SendMessageW(G.deint, BM_GETCHECK, 0, 0) == BST_CHECKED;
             app_set_deinterlace(G.app, on);
             app_set_setting_int("deinterlace", on);
+            return 0;
+        }
+        case ID_WIDE: {
+            int on = SendMessageW(G.wide, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            app_widescreen_on = on;
+            app_set_widescreen(G.app, on);
+            app_set_setting_int("widescreen", on);
+            InvalidateRect(G.preview, NULL, TRUE);
             return 0;
         }
         case ID_MONITOR: {
@@ -618,7 +631,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     wc.lpszClassName = L"DazzleCapture";
     RegisterClassExW(&wc);
 
-    RECT r = { 0, 0, S(800), S(600 + BAR_H) };
+    RECT r = { 0, 0, S(960), S(600 + BAR_H) };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, TRUE);
     G.wnd = CreateWindowExW(0, L"DazzleCapture", L"Dazzle Capture", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                             CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, inst,
@@ -631,6 +644,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     SendMessageW(G.deint, BM_SETCHECK, deint ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(G.monitor, BM_SETCHECK, monitor ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(G.quality, CB_SETCURSEL, app_setting_int("quality", 1), 0);
+    int wide = app_setting_int("widescreen", 0);
+    SendMessageW(G.wide, BM_SETCHECK, wide ? BST_CHECKED : BST_UNCHECKED, 0);
+    app_widescreen_on = wide;
+    app_set_widescreen(G.app, wide);
     app_set_deinterlace(G.app, deint);
     app_set_monitor(G.app, monitor);
     update_folder_button();
