@@ -658,7 +658,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
            }];
     [_engine attachNode:src];
     NSError *err = nil;
-    [_engine connect:src to:_engine.mainMixerNode format:fmt error:&err];
+    [_engine connect:src to:_engine.mainMixerNode format:fmt];
     _engine.mainMixerNode.outputVolume = _monitorCheck.state == NSControlStateValueOn ? 1 : 0;
     g_ring_r = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE);
     if (![_engine startAndReturnError:&err])
