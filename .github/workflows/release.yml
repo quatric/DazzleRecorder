@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install libusb
+      - run: make all test
+      - name: Package
+        run: |
+          mkdir -p out/stage
+          cp -R "build/Dazzle Capture.app" build/dvc100-capture out/stage/
+          ditto -c -k --keepParent "build/Dazzle Capture.app" out/DazzleRecorder-macos-arm64-app.zip
+          tar -C out/stage -czf out/DazzleRecorder-macos-arm64.tar.gz .
+          rm -rf out/stage
+      - uses: actions/upload-artifact@v4
+        with: { name: macos, path: out/* }
+
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with: { version: 0.17.0 }
+      - run: scripts/build-all.sh
+      - name: Package
+        run: |
+          mkdir out
+          for d in dist/*; do
+            n=$(basename "$d")
+            case $n in
+              *windows*) (cd dist && zip -qr "../out/DazzleRecorder-$n.zip" "$n") ;;
+              *) tar -C dist -czf "out/DazzleRecorder-$n.tar.gz" "$n" ;;
+            esac
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: cross, path: out/* }
+
+  release:
+    needs: [macos, cross]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Publish
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" \
+            --title "DazzleRecorder $GITHUB_REF_NAME" --generate-notes
