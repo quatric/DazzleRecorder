@@ -273,6 +273,10 @@ static void append_models(char *inf, size_t len, const target_t *t, int nt)
     append(inf, len, "\r\n");
 }
 
+/* Without this the device is administrators-only on Windows 7 ("Access denied" for a normal user):
+ * SYSTEM and Administrators full access, every other user read/write. */
+#define ACCESS_SDDL "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;BU)(A;;GRGW;;;WD)"
+
 static void make_inf(char *inf, size_t len, int libusbk, const target_t *t, int nt)
 {
     SYSTEMTIME st;
@@ -285,13 +289,15 @@ static void make_inf(char *inf, size_t len, int libusbk, const target_t *t, int 
                "ClassGuid = {ECFB0CFD-74C4-4f52-BBF7-343461CD72AC}\r\nProvider = \"DazzleRecorder\"\r\n"
                "CatalogFile = dazzle.cat\r\nDriverVer = %02d/%02d/%04d,3.1.0.0\r\n\r\n"
                "[ClassInstall32]\r\nAddReg = Class_AddReg\r\n\r\n"
-               "[Class_AddReg]\r\nHKR,,,0,\"libusbK USB Devices\"\r\nHKR,,Icon,,-20\r\n\r\n",
+               "[Class_AddReg]\r\nHKR,,,0,\"libusbK USB Devices\"\r\nHKR,,Icon,,-20\r\n"
+               "HKR,,Security,,\"" ACCESS_SDDL "\"\r\n\r\n",
                st.wMonth, st.wDay, st.wYear);
         append_models(inf, len, t, nt);
         append(inf, len,
                "[Install]\r\nCopyFiles = Drivers_CopyFiles\r\n\r\n"
                "[Install.HW]\r\nAddReg = Dev_AddReg\r\n\r\n"
-               "[Dev_AddReg]\r\nHKR,,DeviceInterfaceGUIDs,0x10000,\"" IFACE_GUID "\"\r\n\r\n"
+               "[Dev_AddReg]\r\nHKR,,DeviceInterfaceGUIDs,0x10000,\"" IFACE_GUID "\"\r\n"
+               "HKR,,Security,,\"" ACCESS_SDDL "\"\r\n\r\n"
                "[Install.Services]\r\nAddService = libusbK, 0x00000002, Service_Install\r\n\r\n"
                "[Service_Install]\r\nDisplayName = \"libusbK USB driver\"\r\nServiceType = 1\r\nStartType = 3\r\n"
                "ErrorControl = 1\r\nServiceBinary = %%12%%\\libusbK.sys\r\n\r\n"
