@@ -15,6 +15,7 @@
 
 #include "dvc100.h"
 #include "recorder.h"
+#include "sysaudio.h"
 
 /* ---- AppKit helpers: the modern convenience constructors need 10.12+, SF Symbols 11+ ---- */
 
@@ -306,7 +307,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     r = dvc100_start(_dev, frame_cb, (__bridge void *)self);
     if (r)
         [self setStatus:[NSString stringWithFormat:@"Video streaming failed: %s", dvc100_strerror(r)]];
-    [self startAudio];
+    [self requestMicrophoneThen:^{ [self startAudio]; }];
 
     _uiTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 20 target:self selector:@selector(tick)
                                               userInfo:nil repeats:YES];
@@ -754,11 +755,48 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
     return noErr;
 }
 
+/* macOS 10.14+ gates the Dazzle's sound input behind the Microphone privacy setting. Ask for it up front
+ * (the system shows its prompt once) and say how to fix it if it was refused. */
+- (void)requestMicrophoneThen:(void (^)(void))go
+{
+    if (@available(macOS 10.14, *)) {
+        AVAuthorizationStatus st = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+        if (st == AVAuthorizationStatusNotDetermined) {
+            [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL ok) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (ok) go(); else [self microphoneDenied];
+                });
+            }];
+            return;
+        }
+        if (st != AVAuthorizationStatusAuthorized) {
+            [self microphoneDenied];
+            return;
+        }
+    }
+    go();
+}
+
+- (void)microphoneDenied
+{
+    [self setStatus:@"No sound: microphone access is off for Dazzle Capture (System Settings > Privacy & Security > Microphone)"];
+    NSAlert *a = [NSAlert new];
+    a.messageText = @"Dazzle Capture needs microphone access";
+    a.informativeText = @"macOS treats the Dazzle's audio input as a microphone. Turn on Dazzle Capture under "
+                        @"Privacy & Security > Microphone, then restart the app, or you will record without sound.";
+    [a addButtonWithTitle:@"Open Settings"];
+    [a addButtonWithTitle:@"Continue Without Sound"];
+    if ([a runModal] == NSAlertFirstButtonReturn)
+        [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:
+            @"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"]];
+}
+
 - (void)startAudio
 {
     int r = dvc100_audio_start(_dev, audio_cb, (__bridge void *)self, &g_audio_rate);
     if (r) {
-        [self setStatus:[NSString stringWithFormat:@"Audio unavailable: %s", dvc100_strerror(r)]];
+        const char *why = sa_last_error();
+        [self setStatus:[NSString stringWithFormat:@"Audio unavailable: %s", why ? why : dvc100_strerror(r)]];
         return;
     }
     g_monitor = _monitorCheck.state == NSControlStateValueOn;

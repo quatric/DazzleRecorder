@@ -37,7 +37,7 @@ struct app {
     _Alignas(8) volatile uint64_t ring_r;
     volatile int peak[2];
     int audio_rate, audio_ok;
-    char audio_problem[160];
+    char audio_problem[260];
     sa_output_t *out;
     volatile int monitor;
 
@@ -230,7 +230,8 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
         if (!a->out)
             snprintf(a->audio_problem, sizeof(a->audio_problem), "No audio output device for monitoring");
     } else {
-        snprintf(a->audio_problem, sizeof(a->audio_problem), "Audio unavailable: %s", dvc100_strerror(r));
+        const char *why = sa_last_error();
+        snprintf(a->audio_problem, sizeof(a->audio_problem), "Audio unavailable: %s", why ? why : dvc100_strerror(r));
     }
     return a;
 }

@@ -193,6 +193,15 @@ static const int16_t *native_convert(sa_input_t *in, const BYTE *data, UINT32 fr
     return in->conv;
 }
 
+static void fail_audio(HRESULT hr)
+{
+    if (hr == E_ACCESSDENIED)
+        sa_set_error("Windows blocked access to the Dazzle's sound. Open Settings > Privacy > Microphone and "
+                     "turn on microphone access and \"Let desktop apps access your microphone\"");
+    else
+        sa_set_error("Windows would not open the Dazzle's sound input (error 0x%08lx)", (unsigned long)hr);
+}
+
 static void *capture_thread(void *arg)
 {
     sa_input_t *in = arg;
@@ -204,16 +213,29 @@ static void *capture_thread(void *arg)
 
     WAVEFORMATEX wf = { WAVE_FORMAT_PCM, 2, 48000, 48000 * 4, 4, 16, 0 };
     in->rate = 48000;
-    if (FAILED(CoCreateInstance(&k_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &k_IID_IMMDeviceEnumerator,
-                                (void **)&en)) ||
-        !(dev = find_endpoint(en, in->vid, in->pid, in->product)) ||
-        FAILED(IMMDevice_Activate(dev, &k_IID_IAudioClient, CLSCTX_ALL, NULL, (void **)&ac))) {
+    HRESULT hr = CoCreateInstance(&k_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &k_IID_IMMDeviceEnumerator,
+                                  (void **)&en);
+    if (SUCCEEDED(hr) && !(dev = find_endpoint(en, in->vid, in->pid, in->product))) {
+        sa_set_error("Windows has no sound input for the Dazzle (check Sound settings > Recording)");
         SetEvent(in->ready);
         goto out;
     }
-    if (FAILED(IAudioClient_Initialize(ac, AUDCLNT_SHAREMODE_SHARED,
-                                       AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                                       2000000 /* 200 ms */, 0, &wf, NULL))) {
+    if (SUCCEEDED(hr))
+        hr = IMMDevice_Activate(dev, &k_IID_IAudioClient, CLSCTX_ALL, NULL, (void **)&ac);
+    if (FAILED(hr)) {
+        fail_audio(hr);
+        SetEvent(in->ready);
+        goto out;
+    }
+    hr = IAudioClient_Initialize(ac, AUDCLNT_SHAREMODE_SHARED,
+                                 AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                                 2000000 /* 200 ms */, 0, &wf, NULL);
+    if (FAILED(hr) && hr == E_ACCESSDENIED) {
+        fail_audio(hr);
+        SetEvent(in->ready);
+        goto out;
+    }
+    if (FAILED(hr)) {
         /* Windows 7 has no auto-converting shared stream: take the mix format and convert here.
          * A failed Initialize leaves the client unusable, so activate a fresh one. */
         WAVEFORMATEX *mf = NULL;
@@ -225,12 +247,17 @@ static void *capture_thread(void *arg)
         if (mf)
             CoTaskMemFree(mf);
         if (!ok) {
+            if (!sa_last_error())
+                sa_set_error("Windows would not open the Dazzle's sound input (error 0x%08lx)", (unsigned long)hr);
             SetEvent(in->ready);
             goto out;
         }
     }
-    if (FAILED(IAudioClient_GetService(ac, &k_IID_IAudioCaptureClient, (void **)&cc)) ||
-        FAILED(IAudioClient_Start(ac))) {
+    hr = IAudioClient_GetService(ac, &k_IID_IAudioCaptureClient, (void **)&cc);
+    if (SUCCEEDED(hr))
+        hr = IAudioClient_Start(ac);
+    if (FAILED(hr)) {
+        fail_audio(hr);
         SetEvent(in->ready);
         goto out;
     }
@@ -272,6 +299,7 @@ out:
 sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_input_cb cb, void *user,
                            int *rate)
 {
+    sa_set_error(NULL);
     sa_input_t *in = calloc(1, sizeof(*in));
     if (!in)
         return NULL;

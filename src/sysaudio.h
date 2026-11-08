@@ -24,6 +24,10 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
 void sa_input_stop(sa_input_t *in);
 const char *sa_backend_name(void);
 
+/* Why the last sa_input_start() failed, in words for the user; NULL if it did not say. */
+const char *sa_last_error(void);
+void sa_set_error(const char *fmt, ...);
+
 /* Playback to the default output device. cb fills `frames` interleaved
  * 16-bit stereo frames from the audio thread. */
 typedef struct sa_output sa_output_t;

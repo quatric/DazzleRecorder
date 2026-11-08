@@ -1,7 +1,25 @@
 /* Device name matching shared by the system audio backends. */
 #include "sysaudio.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
+
+static char g_err[200];
+
+const char *sa_last_error(void) { return g_err[0] ? g_err : NULL; }
+
+void sa_set_error(const char *fmt, ...)
+{
+    va_list ap;
+    if (!fmt) {
+        g_err[0] = 0;
+        return;
+    }
+    va_start(ap, fmt);
+    vsnprintf(g_err, sizeof(g_err), fmt, ap);
+    va_end(ap);
+}
 
 static int contains_nocase(const char *hay, const char *needle)
 {

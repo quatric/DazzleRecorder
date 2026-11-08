@@ -111,9 +111,12 @@ const char *sa_backend_name(void) { return "Core Audio"; }
 sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_input_cb cb, void *user,
                            int *rate)
 {
+    sa_set_error(NULL);
     AudioObjectID id = find_device(vid, pid, product);
-    if (id == kAudioObjectUnknown)
+    if (id == kAudioObjectUnknown) {
+        sa_set_error("macOS shows no sound input for the Dazzle (check System Settings > Sound > Input)");
         return NULL;
+    }
 
     Float64 sr = 48000;
     AudioObjectPropertyAddress a = { kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal,
@@ -140,6 +143,8 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
     CFStringRef uid = dev_string(id, kAudioDevicePropertyDeviceUID);
     if (AudioQueueNewInput(&f, input_cb, c, NULL, NULL, 0, &c->q) || !uid ||
         AudioQueueSetProperty(c->q, kAudioQueueProperty_CurrentDevice, &uid, sizeof(uid))) {
+        sa_set_error("macOS would not open the Dazzle's sound input (allow Dazzle Capture under System Settings "
+                     "> Privacy & Security > Microphone)");
         if (uid)
             CFRelease(uid);
         if (c->q)
@@ -157,6 +162,8 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
             AudioQueueEnqueueBuffer(c->q, b, 0, NULL);
     }
     if (AudioQueueStart(c->q, NULL)) {
+        sa_set_error("macOS would not start the Dazzle's sound input (allow Dazzle Capture under System Settings "
+                     "> Privacy & Security > Microphone)");
         AudioQueueDispose(c->q, true);
         free(c);
         return NULL;
