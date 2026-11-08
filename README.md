@@ -24,30 +24,40 @@ see [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md).
 ## Download
 
 Prebuilt macOS, Windows and Linux builds are on the
-[Releases](https://github.com/quatric/DazzleRecorder/releases) page. Each archive contains the command line
-tool `dvc100-capture` and the GUI `Dazzle Capture` (a live preview with sound, input selection and recording;
-see [Dazzle Capture (app)](#dazzle-capture-app)).
+[Releases](https://github.com/quatric/DazzleRecorder/releases) page. Each one contains the command line
+tool `dvc100-capture`, the GUI `Dazzle Capture` (a live preview with sound, input selection and recording;
+see [Dazzle Capture (app)](#dazzle-capture-app)) and a small `ffmpeg` for recording, so nothing else needs
+to be installed.
 
 ### macOS
 
 Download `DazzleRecorder-macos-universal-app.zip` (Universal 2: Apple silicon and Intel, macOS 10.11 El Capitan
 or later), unzip it and open **Dazzle Capture**. The app
 is ad-hoc signed, not notarized, so the first time right-click it and choose **Open** (or allow it under
-System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle. Recording needs
-`brew install ffmpeg`. `DazzleRecorder-macos-universal.tar.gz` also contains the command line tool.
+System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle.
+`DazzleRecorder-macos-universal.tar.gz` also contains the command line tool and its `ffmpeg`.
 
 ### Windows
 
-1. Download the zip for your machine: `x86_64-windows-gnu` for most PCs, `x86-windows-gnu` for 32-bit,
-   `aarch64-windows-gnu` for Arm.
-2. Install the WinUSB driver for the Dazzle with [Zadig](https://zadig.akeo.ie): plug the device in, pick it in
-   the list (Options → List All Devices), choose **WinUSB** and click Install Driver. This replaces the vendor
-   driver for that device. If Zadig lists the Dazzle once per interface, pick **Interface 0** (the video
-   interface). Without this the app reports that a Dazzle is plugged in but has no WinUSB driver. If the
-   [UsbDk](https://github.com/daynix/UsbDk/releases) driver is installed, the app uses it instead and no Zadig
-   step is needed. Video uses isochronous transfers, which WinUSB supports from Windows 8.1.
-3. Install [ffmpeg](https://ffmpeg.org/download.html) and put it on your `PATH` for recording.
-4. Run `Dazzle Capture.exe`. Windows SmartScreen may warn about an unsigned app: choose More info → Run anyway.
+Windows 7 SP1 and later, 32- and 64-bit, and Windows on Arm.
+
+1. Download the installer for your machine: `DazzleRecorder-x86_64-windows-setup.exe` for most PCs,
+   `x86` for 32-bit Windows, `aarch64` for Windows on Arm.
+2. Run it and keep **Dazzle driver** ticked. With the Dazzle plugged in, it puts a driver on the Dazzle's
+   video interface the way [Zadig](https://zadig.akeo.ie) does: WinUSB on Windows 8.1 and later, and the
+   signed libusbK driver on Windows 7 and 8.0, whose WinUSB cannot stream video. The sound interface keeps
+   Windows' own audio driver. Windows SmartScreen may warn about an unsigned installer: choose More info →
+   Run anyway.
+3. Start **Dazzle Capture** from the Start menu. If the Dazzle was not plugged in during setup, or it still
+   has the manufacturer's driver, the app offers to install the driver when it starts (this needs
+   administrator rights).
+
+The driver tool can also be run by hand from the install folder: `dazzle-driver install` (`--winusb` or
+`--libusbk` to choose), `dazzle-driver status`, and `dazzle-driver uninstall`, which gives the device back to
+the driver it had before. To sign its driver package, it makes a certificate on your PC, trusts it for code
+signing, and deletes the certificate's private key straight after signing, so nothing else can be signed with
+it. The `.zip` downloads hold the same files for running without an installer (run `dazzle-driver.exe` once).
+If the [UsbDk](https://github.com/daynix/UsbDk/releases) driver is installed, the app can use it instead.
 
 ### Linux
 
@@ -61,19 +71,20 @@ System Settings → Privacy & Security). It may ask for microphone access on the
    sudo udevadm control --reload-rules
    ```
 
-3. Install `ffmpeg` for recording (and ALSA for sound, which is present on most desktops).
+3. ALSA is needed for sound (present on most desktops). The bundled static `ffmpeg` is used for recording.
 4. Run `./"Dazzle Capture"`. The GUI uses X11 and also runs under XWayland.
 
 ## Build (macOS)
 
 ```bash
-brew install ffmpeg   # used for MPEG-2 encoding
-make            # build/dvc100-capture and "build/Dazzle Capture.app" (Universal 2, macOS 10.11+)
+brew install nasm     # for ffmpeg's x86 assembly
+make            # build/dvc100-capture, build/ffmpeg and "build/Dazzle Capture.app" (Universal 2, macOS 10.11+)
 make test       # packet/field assembler unit test
 ```
 
-libusb is built from `vendor/libusb`, so nothing else is needed. `make ARCHS=arm64 MACOSX_MIN=11.0` builds
-a single-architecture binary.
+libusb is built from `vendor/libusb`. `make` also builds a small LGPL ffmpeg 7.1 from source
+(`scripts/build-ffmpeg.sh`, about a minute) and puts it inside the app; `make BUNDLE_FFMPEG=0` skips that and
+uses an ffmpeg on your `PATH` instead. `make ARCHS=arm64 MACOSX_MIN=11.0` builds a single-architecture binary.
 
 ## Use
 
@@ -149,8 +160,8 @@ for register traces.
 
 ## Build (Windows and Linux)
 
-`scripts/build-all.sh` cross-builds from any machine with [Zig](https://ziglang.org) (0.17 or newer) and needs
-nothing else; libusb 1.0.30 is vendored in `vendor/libusb` (LGPL-2.1) and ALSA and X11 are loaded at run time.
+`scripts/build-all.sh` cross-builds from macOS or Linux with [Zig](https://ziglang.org) (0.17 or newer) and
+nasm; libusb 1.0.30 is vendored in `vendor/libusb` (LGPL-2.1) and ALSA and X11 are loaded at run time.
 
 ```sh
 ZIG=/path/to/zig scripts/build-all.sh                  # everything into dist/<target>/
@@ -158,7 +169,24 @@ ZIG=/path/to/zig scripts/build-all.sh aarch64-linux-gnu.2.31   # one target
 ```
 
 Targets: Windows x86_64, x86 and arm64; Linux x86_64, x86, arm64 and armhf (glibc 2.31) plus x86_64 and arm64
-(musl). Each folder has `dvc100-capture` (command line) and `Dazzle Capture` (GUI: Win32 on Windows, Xlib on
-Linux, which also runs under XWayland). On Linux, grant access to the USB device with a udev rule, for example
-`SUBSYSTEM=="usb", ATTR{idVendor}=="1b80", MODE="0666"`, and install `ffmpeg` for recording. The Windows build
-uses WinUSB, so the box needs the WinUSB driver (Zadig) instead of the vendor driver.
+(musl). Each folder has `dvc100-capture` (command line), `Dazzle Capture` (GUI: Win32 on Windows, Xlib on
+Linux, which also runs under XWayland) and a static `ffmpeg` (`BUNDLE_FFMPEG=0` skips it).
+
+For Windows 7, the Windows builds must use an msvcrt-based MinGW toolchain, because Zig links the Universal
+CRT, which Windows 7 does not have. The release builds use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)'s
+msvcrt variant:
+
+```sh
+LIBUSBK_DIR=$(scripts/fetch-libusbk.sh) WIN_CC_x86_64=x86_64-w64-mingw32-clang WIN_CC_x86=i686-w64-mingw32-clang \
+  WIN_CC_aarch64=aarch64-w64-mingw32-clang scripts/build-all.sh x86_64-windows-gnu x86-windows-gnu aarch64-windows-gnu
+makensis -DARCH=x86_64 -DVERSION=0.4.0 -DSRC=dist/x86_64-windows-gnu -DOUTFILE=setup.exe installer/windows.nsi
+```
+
+`scripts/fetch-libusbk.sh` downloads the signed libusbK 3.1 driver (BSD licence) that the Windows 7 builds
+install. The bundled ffmpeg is LGPL-2.1; see `resources/licenses/`.
+
+## Troubleshooting sound
+
+`dvc100-capture --info -v` prints the AC97 codec's registers on the DVC100. The codec records its line input;
+if a board is wired to another input, try `DVC100_AC97="1a=0505"` (stereo mix) or `1a=0101`/`0202`/`0303`
+(CD, video, aux) in the environment, for example `DVC100_AC97="1a=0505" dvc100-capture --audio-only -a test.wav -t 5`.

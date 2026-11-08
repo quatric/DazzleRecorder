@@ -252,6 +252,10 @@ int main(int argc, char **argv)
     int r = dvc100_open(&dev, 0, 0);
     if (r) {
         fprintf(stderr, "dvc100-capture: %s\n", dvc100_strerror(r));
+#ifdef _WIN32
+        if (r == DVC100_ERR_NO_DRIVER)
+            fprintf(stderr, "dvc100-capture: run dazzle-driver.exe (in this folder) to install it\n");
+#endif
         return 1;
     }
     r = dvc100_init(dev, input, norm);

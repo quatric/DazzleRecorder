@@ -20,6 +20,8 @@ typedef struct app app_t;
 app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen);
 void app_close(app_t *a);
 
+/* the dvc100 error code of the last app_open() (DVC100_ERR_NO_DRIVER: install the driver) */
+int app_last_error(void);
 int app_width(app_t *a);
 int app_height(app_t *a);
 int app_is_pal(app_t *a);

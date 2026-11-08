@@ -415,7 +415,9 @@ static void *video_writer(void *arg)
         }
         have_frame = 1;
 
-        /* write once, plus repeats while the audio clock is ahead by > 1 frame */
+        /* write once, plus repeats while the audio clock is ahead by > 1 frame. Frames still
+         * queued count as written: they cover time that has already passed, so repeating for
+         * it too (e.g. while ffmpeg starts up and reads audio first) would overshoot. */
         int copies = 1;
         do {
             if (write_all(r, r->vfd, "FRAME\n", 6) || write_all(r, r->vfd, planar, r->frame_bytes)) {
@@ -427,7 +429,7 @@ static void *video_writer(void *arg)
             if (copies > 1)
                 r->repeated++;
             double audio_t = (double)r->audio_samples / r->o.audio_rate;
-            double video_t = r->video_frames / fps;
+            double video_t = (r->video_frames + r->vcount) / fps;
             pthread_mutex_unlock(&r->lock);
             if (audio_t - video_t < 1.5 / fps || copies > 30)
                 break;
@@ -483,9 +485,9 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     if (!ffmpeg) {
         snprintf(err, (size_t)errlen,
 #ifdef _WIN32
-                 "ffmpeg.exe not found (put it next to this program or on PATH, or set DVC100_FFMPEG)"
+                 "ffmpeg.exe not found (it ships next to this program; or put one on PATH, or set DVC100_FFMPEG)"
 #elif defined(__APPLE__)
-                 "ffmpeg not found (brew install ffmpeg, or set DVC100_FFMPEG)"
+                 "ffmpeg not found (it ships inside Dazzle Capture.app; or brew install ffmpeg, or set DVC100_FFMPEG)"
 #else
                  "ffmpeg not found (install the ffmpeg package, or set DVC100_FFMPEG)"
 #endif

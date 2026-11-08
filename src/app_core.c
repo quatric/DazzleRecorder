@@ -175,15 +175,19 @@ const char *app_audio_problem(app_t *a) { return a->audio_problem[0] ? a->audio_
 
 /* ---- device ---- */
 
+static int g_last_error;
+int app_last_error(void) { return g_last_error; }
+
 app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
 {
     dvc100_t *dev = NULL;
     int r = dvc100_open(&dev, 0, 0);
     if (!r)
         r = dvc100_init(dev, input, norm);
+    g_last_error = r;
     if (r) {
 #ifdef _WIN32
-        const char *hint = "program, and that its video interface (Interface 0) uses the WinUSB driver (see README).";
+        const char *hint = "program, and that the Dazzle driver is installed (run dazzle-driver.exe, see README).";
 #elif defined(__linux__)
         const char *hint = "program, and that you may access it (install the udev rule, see README).";
 #else
@@ -192,9 +196,8 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
 #ifdef _WIN32
         if (r == DVC100_ERR_NO_DRIVER)
             snprintf(err, (size_t)errlen,
-                     "%s.\n\nInstall WinUSB for it with Zadig (zadig.akeo.ie): Options > List All Devices, pick "
-                     "the Dazzle (if it is listed per interface, pick Interface 0), choose WinUSB and click "
-                     "Install Driver. Then click Retry.",
+                     "%s.\n\nThe Dazzle driver (WinUSB, or libusbK on Windows 7) needs to be installed for it. "
+                     "This takes a few seconds and needs administrator rights.",
                      dvc100_strerror(r));
         else
 #endif

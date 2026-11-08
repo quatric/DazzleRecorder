@@ -7,6 +7,7 @@
  */
 #include "dvc100.h"
 #include "sysaudio.h"
+#include "known_devices.h"
 
 #include <libusb.h>
 #include <pthread.h>
@@ -90,15 +91,6 @@ static void dbg(int level, const char *fmt, ...)
 
 void dvc100_set_verbose(int level) { g_verbose = level; }
 
-static const struct { uint16_t vid, pid; const char *name; } known_devices[] = {
-    { 0x2304, 0x021a, "Dazzle DVC100" },
-    { 0x2304, 0x0207, "Dazzle DVC90" },
-    /* em2828x family (chip id 0x9x) with the decoder built into the bridge,
-     * from embda_x86_x64.inf ("Roxio/Dazzle Video Capture USB") */
-    { 0x1b80, 0xe60a, "Dazzle Video Capture USB" },
-    { 0x1b80, 0xe31d, "Roxio Video Capture USB" },
-    { 0x1b80, 0xe31c, "Roxio Video Capture USB" },
-};
 
 typedef struct iso_stream {
     dvc100_t *owner;
@@ -154,8 +146,8 @@ const char *dvc100_strerror(int err)
     if (err == DVC100_ERR_NO_MEMORY)
         return "out of memory";
     if (err == DVC100_ERR_NO_DRIVER)
-        return "a Dazzle is plugged in, but its video interface (Interface 0) does not use the WinUSB "
-               "driver, so it cannot be opened";
+        return "a Dazzle is plugged in, but its video interface (Interface 0) does not have the "
+               "WinUSB or libusbK driver, so it cannot be opened";
     return libusb_strerror((enum libusb_error)err);
 }
 
@@ -292,6 +284,55 @@ static int ac97_write(dvc100_t *dev, uint8_t reg, uint16_t val)
     if (r)
         return r;
     return wr8(dev, EM_R42_AC97ADDR, reg);
+}
+
+/* Linux em28xx: address with bit 7 set starts a read, the value lands in 0x40/0x41 */
+static int ac97_read(dvc100_t *dev, uint8_t reg, uint16_t *val)
+{
+    int r = ac97_wait(dev);
+    if (!r)
+        r = wr8(dev, EM_R42_AC97ADDR, reg | 0x80);
+    if (!r)
+        r = ac97_wait(dev);
+    uint8_t b[2];
+    if (!r)
+        r = dvc100_reg_read(dev, EM_R40_AC97LSB, b, 2);
+    if (!r)
+        *val = (uint16_t)(b[0] | b[1] << 8);
+    return r;
+}
+
+/* DVC100_AC97="1a=0303,16=0808" writes codec registers after the normal setup,
+ * for trying other routing on boards wired differently. */
+static void ac97_overrides(dvc100_t *dev)
+{
+    const char *e = getenv("DVC100_AC97");
+    while (e && *e) {
+        unsigned reg, val;
+        int n = 0;
+        if (sscanf(e, "%x=%x%n", &reg, &val, &n) != 2 || n <= 0 || reg > 0x7e) {
+            dbg(0, "ignoring bad DVC100_AC97 entry at \"%s\"", e);
+            break;
+        }
+        dbg(0, "DVC100_AC97: ac97[0x%02x] <- 0x%04x", reg, val);
+        ac97_write(dev, (uint8_t)reg, (uint16_t)val);
+        e += n;
+        e += strspn(e, ", ");
+    }
+}
+
+static void ac97_dump(dvc100_t *dev)
+{
+    if (g_verbose < 1)
+        return;
+    static const uint8_t regs[] = { 0x02, 0x0e, 0x10, 0x12, 0x14, 0x16, 0x18, 0x1a, 0x1c, 0x20, 0x26, 0x2a, 0x32, 0x7c, 0x7e };
+    for (size_t i = 0; i < sizeof(regs); i++) {
+        uint16_t v = 0;
+        if (ac97_read(dev, regs[i], &v) == 0)
+            dbg(1, "ac97[0x%02x] = 0x%04x", regs[i], v);
+        else
+            dbg(1, "ac97[0x%02x] read failed", regs[i]);
+    }
 }
 
 /* ---- device open/close ---- */
@@ -620,6 +661,8 @@ static int em28xx_audio_setup(dvc100_t *dev)
     /* audio source = line (reg 0x0e bits 6-7 = 2), then unmute (0x0f bit 7) */
     r |= wr_bits(dev, EM_R0E_AUDIOSRC, 0x80, 0xc0);
     r |= wr_bits(dev, EM_R0F_XCLK, 0x80, 0x80);
+    ac97_overrides(dev);
+    ac97_dump(dev);
     return r;
 }
 

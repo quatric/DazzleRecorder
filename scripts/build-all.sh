@@ -1,9 +1,19 @@
 #!/bin/sh
-# Cross-builds the Dazzle Capture command line tool (and the Windows GUI) for
-# Windows and Linux with Zig's bundled clang. Nothing else is needed: libusb
-# is vendored and ALSA is loaded at run time.
+# Cross-builds the Dazzle Capture command line tool (and the GUI) for Windows
+# and Linux. Nothing else is needed: libusb is vendored and ALSA is loaded at
+# run time.
 #   ZIG=/path/to/zig scripts/build-all.sh [target ...]
 # Targets are Zig triples; the default is the full list below.
+#
+# Windows 7 needs binaries linked against msvcrt.dll (Zig links the Universal
+# CRT, which Windows 7 lacks). Point these at MinGW-w64 GCC/Clang compilers
+# that use msvcrt (Debian/Ubuntu's gcc-mingw-w64 does) to use them instead:
+#   WIN_CC_x86_64=x86_64-w64-mingw32-gcc-posix WIN_CC_x86=i686-w64-mingw32-gcc-posix
+#   WIN_CC_aarch64=aarch64-w64-mingw32-clang  (optional, for Windows on Arm)
+# LIBUSBK_DIR is the unpacked libusbK-3.1.0.0-bin folder; its signed driver
+# is what the Windows 7 builds install (see scripts/fetch-libusbk.sh).
+# Each build also gets a small static ffmpeg (scripts/build-ffmpeg.sh, which
+# uses WIN_PREFIX_<arch> for Windows); BUNDLE_FFMPEG=0 skips it.
 set -e
 cd "$(dirname "$0")/.."
 ZIG=${ZIG:-zig}
@@ -16,21 +26,32 @@ x86_64-linux-gnu.2.31 x86-linux-gnu.2.31 aarch64-linux-gnu.2.31 arm-linux-gnueab
 x86_64-linux-musl aarch64-linux-musl"}
 
 V=vendor/libusb
-COMMON="-O2 -Wall -Wextra -std=gnu11 -Isrc -I$V"
+COMMON="-O2 -Wall -Wextra -Wno-missing-field-initializers -std=gnu11 -Isrc -I$V"
 SRC="src/dvc100.c src/sysaudio.c src/recorder.c src/app_core.c"
 
 for t in $TARGETS; do
   name=$(echo "$t" | sed 's/\.2\.31$//')
   b=build/$name; mkdir -p $b "$OUT/$name"
+  CC="$ZIG cc -target $t"
   case $t in
   *windows*)
     os=windows; ext=.exe
     LU="$V/core.c $V/descriptor.c $V/hotplug.c $V/io.c $V/strerror.c $V/sync.c $V/os/events_windows.c \
 $V/os/threads_windows.c $V/os/windows_common.c $V/os/windows_usbdk.c $V/os/windows_winusb.c"
-    FL="-I$V/config/windows "
+    FL="-I$V/config/windows -U_WIN32_WINNT -D_WIN32_WINNT=0x0601"
     OSSRC="src/audio_windows.c"
     LIBS="-lole32 -loleaut32 -lwinmm -luuid -lsetupapi -ladvapi32"
     GUI="src/gui_win32.c"; GUILIBS="-lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -luser32 -ldwmapi -Wl,--subsystem,windows"
+    case $t in
+    x86_64-*)  wcc=$WIN_CC_x86_64;  karch=amd64; ff=x86_64-windows ;;
+    x86-*)     wcc=$WIN_CC_x86;     karch=x86;   ff=x86-windows ;;
+    aarch64-*) wcc=$WIN_CC_aarch64; karch=;      ff=aarch64-windows ;;
+    esac
+    if [ -n "$wcc" ]; then
+      CC="$wcc"; LIBS="$LIBS -static"
+    elif [ -n "$karch" ]; then
+      echo "warning: $name built with Zig links the Universal CRT and will not start on a stock Windows 7" >&2
+    fi
     ;;
   *linux*)
     os=linux; ext=
@@ -40,15 +61,38 @@ $V/os/threads_posix.c $V/os/linux_usbfs.c $V/os/linux_netlink.c"
     OSSRC="src/audio_alsa.c"
     LIBS="-lpthread -lm -ldl"
     GUI="src/gui_x11.c"; GUILIBS="-lpthread -lm -ldl"
+    # one static musl ffmpeg per CPU serves the glibc and musl builds alike
+    case $t in x86_64-*) ff=x86_64-linux ;; x86-*) ff=x86-linux ;; aarch64-*) ff=aarch64-linux ;; arm-*) ff=arm-linux ;; esac
     ;;
   *) echo "unsupported target $t" >&2; exit 1 ;;
   esac
-  echo "== $name"
-  $ZIG cc -target $t $COMMON $FL -DDAZZLE_VENDORED_LIBUSB $LU $SRC $OSSRC src/capture.c $LIBS \
-      -o "$OUT/$name/dvc100-capture$ext"
+  echo "== $name ($CC)"
+  $CC $COMMON $FL $LU $SRC $OSSRC src/capture.c $LIBS -o "$OUT/$name/dvc100-capture$ext"
   if [ -f "$GUI" ]; then
-    $ZIG cc -target $t $COMMON $FL $LU $SRC $OSSRC $GUI $GUILIBS $LIBS \
-        -o "$OUT/$name/Dazzle Capture$ext"
+    $CC $COMMON $FL $LU $SRC $OSSRC $GUI $GUILIBS $LIBS -o "$OUT/$name/Dazzle Capture$ext"
+  fi
+  if [ $os = windows ]; then
+    # Zadig-style driver installer, plus the libusbK driver for Windows 7/8.0
+    $CC $COMMON $FL src/driver_win32.c -lsetupapi -lcfgmgr32 -lcrypt32 -lwintrust -lshell32 -ladvapi32 -lole32 \
+        $( [ -n "$wcc" ] && echo -static ) -o "$OUT/$name/dazzle-driver.exe"
+    if [ -n "$karch" ]; then
+      if [ -n "$LIBUSBK_DIR" ]; then
+        mkdir -p "$OUT/$name/driver/libusbK" "$OUT/$name/licenses"
+        cp "$LIBUSBK_DIR/bin/sys/$karch/libusbK.sys" "$LIBUSBK_DIR/bin/sys/$karch/WdfCoInstaller01009.dll" \
+           "$OUT/$name/driver/libusbK/"
+        cp "$LIBUSBK_DIR/bin/dll/$karch/libusbK.dll" "$OUT/$name/"
+        cp resources/windows/libusbK-LICENSE-bsd.txt "$OUT/$name/licenses/libusbK-LICENSE.txt"
+      else
+        echo "warning: LIBUSBK_DIR not set; $name will have no Windows 7 driver" >&2
+      fi
+    fi
+  fi
+  if [ "${BUNDLE_FFMPEG:-1}" = 1 ]; then
+    ffbin=build/ffmpeg-build/out/$ff/ffmpeg$ext
+    [ -f "$ffbin" ] || scripts/build-ffmpeg.sh "$ff" "$ffbin"
+    cp "$ffbin" "$OUT/$name/ffmpeg$ext"
+    mkdir -p "$OUT/$name/licenses"
+    cp resources/licenses/* "$OUT/$name/licenses/"
   fi
   rm -f "$OUT/$name"/*.pdb
 done

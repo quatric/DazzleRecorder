@@ -19,8 +19,19 @@ SYSLIBS  = -framework IOKit -framework CoreFoundation -framework Security \
 BUILD   = build
 LIBUSB  = $(BUILD)/libusb-1.0.a
 APP     = $(BUILD)/Dazzle Capture.app
+# A small LGPL ffmpeg (scripts/build-ffmpeg.sh) goes into the app and next to the
+# command line tool, so recording needs nothing installed. BUNDLE_FFMPEG=0 skips it.
+BUNDLE_FFMPEG ?= 1
+FFMPEG   = $(BUILD)/ffmpeg
 
-all: $(BUILD)/dvc100-capture app
+all: $(BUILD)/dvc100-capture app $(if $(filter 1,$(BUNDLE_FFMPEG)),$(FFMPEG))
+
+$(FFMPEG): scripts/build-ffmpeg.sh
+	for a in $(ARCHS); do scripts/build-ffmpeg.sh macos-$$a $(BUILD)/ffmpeg-build/out/ffmpeg-$$a || exit 1; done
+	lipo -create $(foreach a,$(ARCHS),$(BUILD)/ffmpeg-build/out/ffmpeg-$(a)) -output $@
+	codesign --force --sign - $@
+
+ffmpeg: $(FFMPEG)
 
 $(BUILD):
 	mkdir -p $(BUILD)/libusb
@@ -57,11 +68,14 @@ $(BUILD)/dazzle-capture-app: src/viewer.m $(BUILD)/dvc100.o $(BUILD)/sysaudio.o 
 	        /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia $@ 2>/dev/null && \
 	    codesign --force --sign - $@; fi
 
-app: $(BUILD)/dazzle-capture-app resources/Info.plist resources/AppIcon.icns
+app: $(BUILD)/dazzle-capture-app resources/Info.plist resources/AppIcon.icns $(if $(filter 1,$(BUNDLE_FFMPEG)),$(FFMPEG))
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	sed 's/@MACOSX_MIN@/$(MACOSX_MIN)/' resources/Info.plist > "$(APP)/Contents/Info.plist"
 	cp resources/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
 	cp $(BUILD)/dazzle-capture-app "$(APP)/Contents/MacOS/Dazzle Capture"
+	if [ "$(BUNDLE_FFMPEG)" = 1 ]; then \
+	    cp $(FFMPEG) "$(APP)/Contents/MacOS/ffmpeg" && \
+	    mkdir -p "$(APP)/Contents/Resources/licenses" && cp resources/licenses/* "$(APP)/Contents/Resources/licenses/"; fi
 	codesign --force --sign - "$(APP)"
 
 $(BUILD)/test_assembler: tests/test_assembler.c src/dvc100.c src/sysaudio.c src/audio_coreaudio.c $(LIBUSB)
@@ -78,4 +92,4 @@ install: all
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all app test install clean
+.PHONY: all app ffmpeg test install clean

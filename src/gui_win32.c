@@ -562,6 +562,31 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(h, msg, wp, lp);
 }
 
+/* Runs dazzle-driver.exe (next to this program) elevated and waits for it. */
+static void run_driver_installer(void)
+{
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    wchar_t *slash = wcsrchr(exe, L'\\');
+    if (slash)
+        slash[1] = 0;
+    wcscat(exe, L"dazzle-driver.exe");
+    SHELLEXECUTEINFOW se = { sizeof(se) };
+    se.fMask = SEE_MASK_NOCLOSEPROCESS;
+    se.lpVerb = L"runas";
+    se.lpFile = exe;
+    se.lpParameters = L"install";
+    se.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&se) || !se.hProcess) {
+        if (GetLastError() != ERROR_CANCELLED)
+            MessageBoxW(NULL, L"Could not start dazzle-driver.exe. It should be in the same folder as Dazzle Capture.",
+                        L"Dazzle driver", MB_ICONERROR);
+        return;
+    }
+    WaitForSingleObject(se.hProcess, INFINITE);
+    CloseHandle(se.hProcess);
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
     (void)prev, (void)cmdline;
@@ -588,8 +613,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     char err[600];
     /* the device may be plugged in, or its driver installed, while this is up */
     while (!(G.app = app_open(input, norm, err, sizeof(err)))) {
-        wchar_t w[600];
+        wchar_t w[800];
         utf8_to_w(err, w, 600);
+        if (app_last_error() == DVC100_ERR_NO_DRIVER) {
+            wcscat(w, L"\n\nInstall the driver now?");
+            int a = MessageBoxW(NULL, w, L"Dazzle driver needed", MB_ICONWARNING | MB_YESNOCANCEL);
+            if (a == IDCANCEL)
+                return 1;
+            if (a == IDYES)
+                run_driver_installer();
+            continue;
+        }
         if (MessageBoxW(NULL, w, L"No Dazzle capture device available", MB_ICONERROR | MB_RETRYCANCEL) != IDRETRY)
             return 1;
     }

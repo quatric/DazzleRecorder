@@ -1,0 +1,15 @@
+The ffmpeg program included with Dazzle Capture is FFmpeg 7.1.5
+(https://ffmpeg.org), licensed under the GNU Lesser General Public License
+version 2.1 or later (see FFmpeg-COPYING.LGPLv2.1.txt).
+
+It is an unmodified FFmpeg built with only the parts the recorder uses:
+  configure --disable-everything --disable-autodetect --disable-network
+            --enable-protocol=file,pipe --enable-demuxer=yuv4mpegpipe,pcm_s16le
+            --enable-decoder=rawvideo,pcm_s16le --enable-encoder=mpeg2video,mp2
+            --enable-muxer=mpeg2dvd
+            --enable-filter=yadif,setfield,scale,format,null,anull,aformat,aresample
+The exact build script is scripts/build-ffmpeg.sh in the DazzleRecorder
+source. The FFmpeg source code is available at
+https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+You may replace this ffmpeg with any other build: put it next to Dazzle
+Capture, or set DVC100_FFMPEG to its path.

@@ -125,7 +125,73 @@ struct sa_input {
     HANDLE ready;
     int ok;
     pthread_t thread;
+    int rate;
+    /* native mix format, when the auto-converting stream is not available (Windows 7) */
+    int native, channels, bytes, is_float;
+    int16_t *conv;
+    UINT32 conv_frames;
 };
+
+#ifndef WAVE_FORMAT_EXTENSIBLE
+#define WAVE_FORMAT_EXTENSIBLE 0xFFFE
+#endif
+#ifndef WAVE_FORMAT_IEEE_FLOAT
+#define WAVE_FORMAT_IEEE_FLOAT 0x0003
+#endif
+
+/* KSDATAFORMAT_SUBTYPE_IEEE_FLOAT */
+static const GUID k_SUBTYPE_FLOAT = { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+
+static int native_format(sa_input_t *in, const WAVEFORMATEX *mf)
+{
+    in->channels = mf->nChannels;
+    in->bytes = mf->wBitsPerSample / 8;
+    in->rate = (int)mf->nSamplesPerSec;
+    in->is_float = mf->wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
+    if (mf->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mf->cbSize >= 22) {
+        const WAVEFORMATEXTENSIBLE *x = (const WAVEFORMATEXTENSIBLE *)(const void *)mf;
+        in->is_float = !memcmp(&x->SubFormat, &k_SUBTYPE_FLOAT, sizeof(GUID));
+        if (x->Samples.wValidBitsPerSample)
+            in->bytes = mf->wBitsPerSample / 8; /* container size is what is in the buffer */
+    }
+    if (in->channels < 1 || (in->is_float && in->bytes != 4) || in->bytes < 2 || in->bytes > 4)
+        return 0;
+    in->native = 1;
+    return 1;
+}
+
+static int16_t native_sample(const sa_input_t *in, const BYTE *p)
+{
+    if (in->is_float) {
+        float f;
+        memcpy(&f, p, 4);
+        f = f > 1 ? 1 : f < -1 ? -1 : f;
+        return (int16_t)(f * 32767.0f);
+    }
+    /* signed little-endian PCM: the top 16 bits */
+    return (int16_t)(p[in->bytes - 1] << 8 | p[in->bytes - 2]);
+}
+
+/* mix-format packet -> interleaved 16-bit stereo */
+static const int16_t *native_convert(sa_input_t *in, const BYTE *data, UINT32 frames, int silent)
+{
+    if (frames > in->conv_frames) {
+        int16_t *n = realloc(in->conv, (size_t)frames * 4);
+        if (!n)
+            return NULL;
+        in->conv = n;
+        in->conv_frames = frames;
+    }
+    size_t stride = (size_t)in->channels * in->bytes;
+    for (UINT32 i = 0; i < frames; i++) {
+        const BYTE *f = data + i * stride;
+        int16_t l = silent ? 0 : native_sample(in, f);
+        int16_t r = silent ? 0 : in->channels > 1 ? native_sample(in, f + in->bytes) : l;
+        in->conv[2 * i] = l;
+        in->conv[2 * i + 1] = r;
+    }
+    return in->conv;
+}
 
 static void *capture_thread(void *arg)
 {
@@ -137,14 +203,33 @@ static void *capture_thread(void *arg)
     int com = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
 
     WAVEFORMATEX wf = { WAVE_FORMAT_PCM, 2, 48000, 48000 * 4, 4, 16, 0 };
+    in->rate = 48000;
     if (FAILED(CoCreateInstance(&k_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &k_IID_IMMDeviceEnumerator,
                                 (void **)&en)) ||
         !(dev = find_endpoint(en, in->vid, in->pid, in->product)) ||
-        FAILED(IMMDevice_Activate(dev, &k_IID_IAudioClient, CLSCTX_ALL, NULL, (void **)&ac)) ||
-        FAILED(IAudioClient_Initialize(ac, AUDCLNT_SHAREMODE_SHARED,
+        FAILED(IMMDevice_Activate(dev, &k_IID_IAudioClient, CLSCTX_ALL, NULL, (void **)&ac))) {
+        SetEvent(in->ready);
+        goto out;
+    }
+    if (FAILED(IAudioClient_Initialize(ac, AUDCLNT_SHAREMODE_SHARED,
                                        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-                                       2000000 /* 200 ms */, 0, &wf, NULL)) ||
-        FAILED(IAudioClient_GetService(ac, &k_IID_IAudioCaptureClient, (void **)&cc)) ||
+                                       2000000 /* 200 ms */, 0, &wf, NULL))) {
+        /* Windows 7 has no auto-converting shared stream: take the mix format and convert here.
+         * A failed Initialize leaves the client unusable, so activate a fresh one. */
+        WAVEFORMATEX *mf = NULL;
+        IAudioClient_Release(ac);
+        ac = NULL;
+        int ok = SUCCEEDED(IMMDevice_Activate(dev, &k_IID_IAudioClient, CLSCTX_ALL, NULL, (void **)&ac)) &&
+                 SUCCEEDED(IAudioClient_GetMixFormat(ac, &mf)) && native_format(in, mf) &&
+                 SUCCEEDED(IAudioClient_Initialize(ac, AUDCLNT_SHAREMODE_SHARED, 0, 2000000, 0, mf, NULL));
+        if (mf)
+            CoTaskMemFree(mf);
+        if (!ok) {
+            SetEvent(in->ready);
+            goto out;
+        }
+    }
+    if (FAILED(IAudioClient_GetService(ac, &k_IID_IAudioCaptureClient, (void **)&cc)) ||
         FAILED(IAudioClient_Start(ac))) {
         SetEvent(in->ready);
         goto out;
@@ -161,9 +246,15 @@ static void *capture_thread(void *arg)
             DWORD flags;
             if (FAILED(IAudioCaptureClient_GetBuffer(cc, &data, &frames, &flags, NULL, NULL)))
                 break;
-            if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
-                memset(data, 0, (size_t)frames * 4);
-            in->cb((const int16_t *)(const void *)data, (int)frames, in->user);
+            if (in->native) {
+                const int16_t *pcm = native_convert(in, data, frames, flags & AUDCLNT_BUFFERFLAGS_SILENT);
+                if (pcm)
+                    in->cb(pcm, (int)frames, in->user);
+            } else {
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
+                    memset(data, 0, (size_t)frames * 4);
+                in->cb((const int16_t *)(const void *)data, (int)frames, in->user);
+            }
             IAudioCaptureClient_ReleaseBuffer(cc, frames);
         }
     }
@@ -204,7 +295,7 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
         return NULL;
     }
     if (rate)
-        *rate = 48000;
+        *rate = in->rate;
     return in;
 }
 
@@ -215,6 +306,7 @@ void sa_input_stop(sa_input_t *in)
     in->quit = 1;
     pthread_join(in->thread, NULL);
     CloseHandle(in->ready);
+    free(in->conv);
     free(in);
 }
 
