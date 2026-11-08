@@ -133,6 +133,8 @@ static volatile int g_peak[2];
     dvc100_t *_dev;
     CVPixelBufferPoolRef _pool;
     int _width, _height, _pal;
+    int _audioOK;                         /* audio input running; otherwise recordings get silence */
+    uint64_t _silenceFrames, _silenceFed;
     volatile int _deinterlace;
     int _widescreen;
     NSLayoutConstraint *_aspectConstraint;
@@ -190,7 +192,17 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 {
     pthread_mutex_lock(&_recLock);
     if (_rec)
+    {
         rec_video(_rec, f->data); /* full interlaced frame; ffmpeg deinterlaces properly */
+        if (!_audioOK) {
+            /* no audio input (microphone refused, device missing): feed 48 kHz silence so the file still
+             * has an audio clock instead of ffmpeg waiting for audio that never comes */
+            static const int16_t zeros[2 * 1922] = { 0 };
+            uint64_t due = ++_silenceFrames * (_pal ? 1920 : 8008) / (_pal ? 1 : 5);
+            rec_audio(_rec, zeros, (int)(due - _silenceFed));
+            _silenceFed = due;
+        }
+    }
     pthread_mutex_unlock(&_recLock);
 
     CVPixelBufferRef pb = NULL;
@@ -799,6 +811,9 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
         [self setStatus:[NSString stringWithFormat:@"Audio unavailable: %s", why ? why : dvc100_strerror(r)]];
         return;
     }
+    pthread_mutex_lock(&_recLock);
+    _audioOK = 1;
+    pthread_mutex_unlock(&_recLock);
     g_monitor = _monitorCheck.state == NSControlStateValueOn;
     g_ring_r = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE);
     if (@available(macOS 10.15, *)) {
