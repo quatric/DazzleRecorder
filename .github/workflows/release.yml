@@ -13,14 +13,19 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install libusb
       - run: make all test
+      - name: Check Universal 2
+        run: |
+          for f in "build/Dazzle Capture.app/Contents/MacOS/Dazzle Capture" build/dvc100-capture; do
+            lipo "$f" -verify_arch x86_64 arm64
+            ! otool -L "$f" | grep -q '@rpath/'
+          done
       - name: Package
         run: |
           mkdir -p out/stage
           cp -R "build/Dazzle Capture.app" build/dvc100-capture out/stage/
-          ditto -c -k --keepParent "build/Dazzle Capture.app" out/DazzleRecorder-macos-arm64-app.zip
-          tar -C out/stage -czf out/DazzleRecorder-macos-arm64.tar.gz .
+          ditto -c -k --keepParent "build/Dazzle Capture.app" out/DazzleRecorder-macos-universal-app.zip
+          tar -C out/stage -czf out/DazzleRecorder-macos-universal.tar.gz .
           rm -rf out/stage
       - uses: actions/upload-artifact@v4
         with: { name: macos, path: out/* }

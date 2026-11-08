@@ -586,12 +586,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     LocalFree(argv);
 
     char err[600];
-    G.app = app_open(input, norm, err, sizeof(err));
-    if (!G.app) {
+    /* the device may be plugged in, or its driver installed, while this is up */
+    while (!(G.app = app_open(input, norm, err, sizeof(err)))) {
         wchar_t w[600];
         utf8_to_w(err, w, 600);
-        MessageBoxW(NULL, w, L"No Dazzle capture device available", MB_ICONERROR);
-        return 1;
+        if (MessageBoxW(NULL, w, L"No Dazzle capture device available", MB_ICONERROR | MB_RETRYCANCEL) != IDRETRY)
+            return 1;
     }
     G.w = app_width(G.app);
     G.h = app_height(G.app);

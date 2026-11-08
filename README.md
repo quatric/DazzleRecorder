@@ -30,18 +30,22 @@ see [Dazzle Capture (app)](#dazzle-capture-app)).
 
 ### macOS
 
-Download `DazzleRecorder-macos-arm64-app.zip` (Apple Silicon), unzip it and open **Dazzle Capture**. The app
+Download `DazzleRecorder-macos-universal-app.zip` (Universal 2: Apple silicon and Intel, macOS 10.11 El Capitan
+or later), unzip it and open **Dazzle Capture**. The app
 is ad-hoc signed, not notarized, so the first time right-click it and choose **Open** (or allow it under
 System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle. Recording needs
-`brew install ffmpeg`. `DazzleRecorder-macos-arm64.tar.gz` also contains the command line tool.
+`brew install ffmpeg`. `DazzleRecorder-macos-universal.tar.gz` also contains the command line tool.
 
 ### Windows
 
 1. Download the zip for your machine: `x86_64-windows-gnu` for most PCs, `x86-windows-gnu` for 32-bit,
    `aarch64-windows-gnu` for Arm.
 2. Install the WinUSB driver for the Dazzle with [Zadig](https://zadig.akeo.ie): plug the device in, pick it in
-   the list (options → List All Devices), choose **WinUSB** and click Install Driver. This replaces the vendor
-   driver for that device.
+   the list (Options → List All Devices), choose **WinUSB** and click Install Driver. This replaces the vendor
+   driver for that device. If Zadig lists the Dazzle once per interface, pick **Interface 0** (the video
+   interface). Without this the app reports that a Dazzle is plugged in but has no WinUSB driver. If the
+   [UsbDk](https://github.com/daynix/UsbDk/releases) driver is installed, the app uses it instead and no Zadig
+   step is needed. Video uses isochronous transfers, which WinUSB supports from Windows 8.1.
 3. Install [ffmpeg](https://ffmpeg.org/download.html) and put it on your `PATH` for recording.
 4. Run `Dazzle Capture.exe`. Windows SmartScreen may warn about an unsigned app: choose More info → Run anyway.
 
@@ -63,11 +67,13 @@ System Settings → Privacy & Security). It may ask for microphone access on the
 ## Build (macOS)
 
 ```bash
-brew install libusb
 brew install ffmpeg   # used for MPEG-2 encoding
-make            # build/dvc100-capture and "build/Dazzle Capture.app"
+make            # build/dvc100-capture and "build/Dazzle Capture.app" (Universal 2, macOS 10.11+)
 make test       # packet/field assembler unit test
 ```
+
+libusb is built from `vendor/libusb`, so nothing else is needed. `make ARCHS=arm64 MACOSX_MIN=11.0` builds
+a single-architecture binary.
 
 ## Use
 

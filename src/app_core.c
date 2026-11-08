@@ -189,6 +189,15 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
 #else
         const char *hint = "app.";
 #endif
+#ifdef _WIN32
+        if (r == DVC100_ERR_NO_DRIVER)
+            snprintf(err, (size_t)errlen,
+                     "%s.\n\nInstall WinUSB for it with Zadig (zadig.akeo.ie): Options > List All Devices, pick "
+                     "the Dazzle (if it is listed per interface, pick Interface 0), choose WinUSB and click "
+                     "Install Driver. Then click Retry.",
+                     dvc100_strerror(r));
+        else
+#endif
         snprintf(err, (size_t)errlen, "%s.\n\nCheck that the device is plugged in and not in use by another %s",
                  dvc100_strerror(r), hint);
         dvc100_close(dev);

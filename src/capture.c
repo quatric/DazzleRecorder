@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -381,8 +382,15 @@ int main(int argc, char **argv)
         pthread_mutex_lock(&q.lock);
         while (!q.count && !g_stop) {
             struct timespec ts;
+#ifdef __APPLE__ /* clock_gettime() needs macOS 10.12 */
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            ts.tv_sec = tv.tv_sec + 2;
+            ts.tv_nsec = (long)tv.tv_usec * 1000;
+#else
             clock_gettime(CLOCK_REALTIME, &ts);
             ts.tv_sec += 2;
+#endif
             if (pthread_cond_timedwait(&q.cond, &q.lock, &ts) == ETIMEDOUT) {
                 fprintf(stderr, "dvc100-capture: no frames for 2 s (check the video source)\n");
             }

@@ -24,6 +24,7 @@ typedef struct dvc100 dvc100_t;
 #define DVC100_ERR_I2C       (-1002)
 #define DVC100_ERR_TIMEOUT   (-1003)
 #define DVC100_ERR_NO_MEMORY (-1004)
+#define DVC100_ERR_NO_DRIVER (-1005) /* Windows: present, but not bound to WinUSB */
 
 typedef enum {
     DVC100_INPUT_COMPOSITE = 0,

@@ -10,10 +10,55 @@
 #import <CoreImage/CoreImage.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
-#import <os/lock.h>
+#import <AudioUnit/AudioUnit.h>
+#include <pthread.h>
 
 #include "dvc100.h"
 #include "recorder.h"
+
+/* ---- AppKit helpers: the modern convenience constructors need 10.12+, SF Symbols 11+ ---- */
+
+static NSTextField *make_label(NSString *s)
+{
+    if (@available(macOS 10.12, *))
+        return [NSTextField labelWithString:s];
+    NSTextField *l = [NSTextField new];
+    l.stringValue = s;
+    l.bezeled = NO;
+    l.drawsBackground = NO;
+    l.editable = NO;
+    l.selectable = NO;
+    l.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
+    l.textColor = NSColor.labelColor;
+    l.lineBreakMode = NSLineBreakByClipping;
+    return l;
+}
+
+static NSButton *make_button(NSString *title, id target, SEL action, BOOL checkbox)
+{
+    if (@available(macOS 10.12, *))
+        return checkbox ? [NSButton checkboxWithTitle:title target:target action:action]
+                        : [NSButton buttonWithTitle:title target:target action:action];
+    NSButton *b = [NSButton new];
+    b.title = title;
+    b.target = target;
+    b.action = action;
+    if (checkbox) {
+        [b setButtonType:NSButtonTypeSwitch];
+    } else {
+        [b setButtonType:NSButtonTypeMomentaryPushIn];
+        b.bezelStyle = NSBezelStyleRounded;
+    }
+    return b;
+}
+
+static void set_symbol(NSButton *b, NSString *name, NSString *desc)
+{
+    if (@available(macOS 11.0, *)) {
+        b.image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:desc];
+        b.imagePosition = NSImageLeading;
+    }
+}
 
 /* ---- preview view: keeps the picture at 4:3 (or stretched to 16:9) inside whatever space it has ---- */
 
@@ -34,7 +79,7 @@
         _displayLayer.videoGravity = AVLayerVideoGravityResize;
         [self.layer addSublayer:_displayLayer];
 
-        _badge = [NSTextField labelWithString:@""];
+        _badge = make_label(@"");
         _badge.font = [NSFont monospacedDigitSystemFontOfSize:13 weight:NSFontWeightSemibold];
         _badge.textColor = NSColor.whiteColor;
         _badge.backgroundColor = [NSColor colorWithRed:0.8 green:0.05 blue:0.05 alpha:0.85];
@@ -94,7 +139,8 @@ static volatile int g_peak[2];
     CVPixelBufferRef _lastFrame;
     NSLock *_lastLock;
 
-    os_unfair_lock _recLock;
+    pthread_mutex_t _recLock;
+    AudioUnit _outputUnit; /* monitor output before 10.15 (no AVAudioSourceNode) */
     recorder_t *_rec;
     NSString *_recPath;
     NSDate *_recStart;
@@ -133,18 +179,18 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (void)recordAudio:(const int16_t *)s frames:(int)frames
 {
-    os_unfair_lock_lock(&_recLock);
+    pthread_mutex_lock(&_recLock);
     if (_rec)
         rec_audio(_rec, s, frames);
-    os_unfair_lock_unlock(&_recLock);
+    pthread_mutex_unlock(&_recLock);
 }
 
 - (void)pushFrame:(const dvc100_frame_t *)f
 {
-    os_unfair_lock_lock(&_recLock);
+    pthread_mutex_lock(&_recLock);
     if (_rec)
         rec_video(_rec, f->data); /* full interlaced frame; ffmpeg deinterlaces properly */
-    os_unfair_lock_unlock(&_recLock);
+    pthread_mutex_unlock(&_recLock);
 
     CVPixelBufferRef pb = NULL;
     if (CVPixelBufferPoolCreatePixelBuffer(NULL, _pool, &pb) != kCVReturnSuccess)
@@ -177,10 +223,20 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
         CFDictionarySetValue(d, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
         dispatch_async(dispatch_get_main_queue(), ^{
-            AVSampleBufferVideoRenderer *renderer = self->_preview.displayLayer.sampleBufferRenderer;
-            if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed)
-                [renderer flush];
-            [renderer enqueueSampleBuffer:sb];
+            AVSampleBufferDisplayLayer *layer = self->_preview.displayLayer;
+            if (@available(macOS 14.0, *)) {
+                AVSampleBufferVideoRenderer *renderer = layer.sampleBufferRenderer;
+                if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed)
+                    [renderer flush];
+                [renderer enqueueSampleBuffer:sb];
+            } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                if (layer.status == AVQueuedSampleBufferRenderingStatusFailed)
+                    [layer flush];
+                [layer enqueueSampleBuffer:sb];
+#pragma clang diagnostic pop
+            }
             CFRelease(sb);
         });
     }
@@ -199,7 +255,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 - (void)applicationDidFinishLaunching:(NSNotification *)note
 {
     _lastLock = [NSLock new];
-    _recLock = OS_UNFAIR_LOCK_INIT;
+    pthread_mutex_init(&_recLock, NULL);
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
     [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES }];
     NSString *folder = [ud stringForKey:@"folder"];
@@ -259,7 +315,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (NSTextField *)label:(NSString *)s
 {
-    NSTextField *l = [NSTextField labelWithString:s];
+    NSTextField *l = make_label(s);
     l.textColor = NSColor.secondaryLabelColor;
     return l;
 }
@@ -298,11 +354,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _inputPopup.target = self;
     _inputPopup.action = @selector(inputChanged:);
 
-    _deintCheck = [NSButton checkboxWithTitle:@"Deinterlace" target:self action:@selector(deinterlaceChanged:)];
+    _deintCheck = make_button(@"Deinterlace", self, @selector(deinterlaceChanged:), YES);
     _deintCheck.state = _deinterlace ? NSControlStateValueOn : NSControlStateValueOff;
     _deintCheck.toolTip = @"Preview and recording. Off records interlaced MPEG-2, as on a DVD.";
 
-    _wideCheck = [NSButton checkboxWithTitle:@"Widescreen" target:self action:@selector(widescreenChanged:)];
+    _wideCheck = make_button(@"Widescreen", self, @selector(widescreenChanged:), YES);
     _wideCheck.state = _widescreen ? NSControlStateValueOn : NSControlStateValueOff;
     _wideCheck.toolTip = @"Stretch the picture to 16:9 in the preview, snapshots and recordings.";
 
@@ -312,10 +368,9 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _qualityPopup.target = self;
     _qualityPopup.action = @selector(qualityChanged:);
 
-    _folderButton = [NSButton buttonWithTitle:@"" target:self action:@selector(chooseFolder:)];
+    _folderButton = make_button(@"", self, @selector(chooseFolder:), NO);
     _folderButton.bezelStyle = NSBezelStyleRounded;
-    _folderButton.imagePosition = NSImageLeading;
-    _folderButton.image = [NSImage imageWithSystemSymbolName:@"folder" accessibilityDescription:@"Folder"];
+    set_symbol(_folderButton, @"folder", @"Folder");
     [_folderButton.widthAnchor constraintLessThanOrEqualToConstant:220].active = YES;
     [self updateFolderButton];
 
@@ -329,16 +384,16 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [row1 setCustomSpacing:16 afterView:_qualityPopup];
 
     /* row 2: record button, time, meters, monitor */
-    _recordButton = [NSButton buttonWithTitle:@"Record" target:self action:@selector(toggleRecord:)];
+    _recordButton = make_button(@"Record", self, @selector(toggleRecord:), NO);
     _recordButton.bezelStyle = NSBezelStyleRounded;
-    _recordButton.image = [NSImage imageWithSystemSymbolName:@"record.circle" accessibilityDescription:nil];
-    _recordButton.imagePosition = NSImageLeading;
-    _recordButton.contentTintColor = NSColor.systemRedColor;
+    set_symbol(_recordButton, @"record.circle", nil);
+    if (@available(macOS 10.14, *))
+        _recordButton.contentTintColor = NSColor.systemRedColor;
     _recordButton.keyEquivalent = @"r";
     _recordButton.keyEquivalentModifierMask = NSEventModifierFlagCommand;
     [_recordButton.widthAnchor constraintGreaterThanOrEqualToConstant:110].active = YES;
 
-    _timeLabel = [NSTextField labelWithString:@"00:00:00"];
+    _timeLabel = make_label(@"00:00:00");
     _timeLabel.font = [NSFont monospacedDigitSystemFontOfSize:15 weight:NSFontWeightMedium];
 
     _meterL = [self meter];
@@ -351,11 +406,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     meters.spacing = 2;
     meters.alignment = NSLayoutAttributeLeading;
 
-    _monitorCheck = [NSButton checkboxWithTitle:@"Play audio" target:self action:@selector(monitorChanged:)];
+    _monitorCheck = make_button(@"Play audio", self, @selector(monitorChanged:), YES);
     _monitorCheck.state = [NSUserDefaults.standardUserDefaults boolForKey:@"monitor"] ? NSControlStateValueOn
                                                                                       : NSControlStateValueOff;
 
-    _statusLabel = [NSTextField labelWithString:@""];
+    _statusLabel = make_label(@"");
     _statusLabel.textColor = NSColor.secondaryLabelColor;
     _statusLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
     [_statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
@@ -482,6 +537,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 - (void)monitorChanged:(id)sender
 {
     BOOL on = _monitorCheck.state == NSControlStateValueOn;
+    g_monitor = on;
     _engine.mainMixerNode.outputVolume = on ? 1 : 0;
     [NSUserDefaults.standardUserDefaults setBool:on forKey:@"monitor"];
 }
@@ -552,15 +608,15 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         [a beginSheetModalForWindow:_window completionHandler:nil];
         return;
     }
-    os_unfair_lock_lock(&_recLock);
+    pthread_mutex_lock(&_recLock);
     _rec = rec;
-    os_unfair_lock_unlock(&_recLock);
+    pthread_mutex_unlock(&_recLock);
     _recPath = path;
     _recStart = NSDate.date;
     _recDeinterlaced = o.deinterlace;
 
     _recordButton.title = @"Stop";
-    _recordButton.image = [NSImage imageWithSystemSymbolName:@"stop.circle.fill" accessibilityDescription:nil];
+    set_symbol(_recordButton, @"stop.circle.fill", nil);
     _deintCheck.enabled = _wideCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = NO;
     _preview.badge.hidden = NO;
     [self setStatus:[NSString stringWithFormat:@"Recording %@ MPEG-2 to %@",
@@ -569,10 +625,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (void)stopRecording
 {
-    os_unfair_lock_lock(&_recLock);
+    pthread_mutex_lock(&_recLock);
     recorder_t *rec = _rec;
     _rec = NULL;
-    os_unfair_lock_unlock(&_recLock);
+    pthread_mutex_unlock(&_recLock);
     if (!rec)
         return;
 
@@ -585,8 +641,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_recordButton.enabled = YES;
             self->_recordButton.title = @"Record";
-            self->_recordButton.image = [NSImage imageWithSystemSymbolName:@"record.circle"
-                                                  accessibilityDescription:nil];
+            set_symbol(self->_recordButton, @"record.circle", nil);
             self->_deintCheck.enabled = self->_wideCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = YES;
             self->_preview.badge.hidden = YES;
             if (r == 0) {
@@ -643,7 +698,20 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     NSURL *url = [_folder URLByAppendingPathComponent:name];
     CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     NSError *err = nil;
-    [ctx writePNGRepresentationOfImage:img toURL:url format:kCIFormatRGBA8 colorSpace:cs options:@{} error:&err];
+    if (@available(macOS 10.13, *)) {
+        [ctx writePNGRepresentationOfImage:img toURL:url format:kCIFormatRGBA8 colorSpace:cs options:@{} error:&err];
+    } else {
+        CGImageRef cg = [ctx createCGImage:img fromRect:img.extent format:kCIFormatRGBA8 colorSpace:cs];
+        NSData *png = nil;
+        if (cg) {
+            NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:cg];
+            png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            CGImageRelease(cg);
+        }
+        if (!png || ![png writeToURL:url options:NSDataWritingAtomic error:&err])
+            if (!err)
+                err = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError userInfo:nil];
+    }
     CGColorSpaceRelease(cs);
     CVPixelBufferRelease(pb);
     [self setStatus:err ? err.localizedDescription : [@"Saved " stringByAppendingString:name]];
@@ -654,6 +722,38 @@ static void audio_cb(const int16_t *s, int frames, void *user)
  * through libusb; the black Dazzle's comes from its Core Audio device. Either
  * way it is played via a ring buffer. */
 
+/* Pull n frames from the ring into planar float buffers; returns 0 if all silence. */
+static volatile int g_monitor = 1; /* AudioUnit path only; AVAudioEngine mutes in its mixer */
+static int ring_render(float *L, float *R, uint32_t n, float gain)
+{
+    const uint64_t target = (uint64_t)g_audio_rate * 60 / 1000, maxlag = (uint64_t)g_audio_rate / 4;
+    uint64_t w = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE), rd = g_ring_r;
+    if (w - rd > maxlag || rd > w)
+        rd = w > target ? w - target : 0; /* drifted too far behind: resync */
+    int any = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (rd < w) {
+            L[i] = g_ring[(rd % RING_FRAMES) * 2] / 32768.0f * gain;
+            R[i] = g_ring[(rd % RING_FRAMES) * 2 + 1] / 32768.0f * gain;
+            rd++;
+            any = 1;
+        } else {
+            L[i] = R[i] = 0;
+        }
+    }
+    g_ring_r = rd;
+    return any && gain > 0;
+}
+
+static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts,
+                                   UInt32 bus, UInt32 n, AudioBufferList *abl)
+{
+    (void)ref, (void)ts, (void)bus;
+    if (!ring_render(abl->mBuffers[0].mData, abl->mBuffers[1].mData, n, g_monitor ? 1.0f : 0.0f))
+        *flags |= kAudioUnitRenderAction_OutputIsSilence;
+    return noErr;
+}
+
 - (void)startAudio
 {
     int r = dvc100_audio_start(_dev, audio_cb, (__bridge void *)self, &g_audio_rate);
@@ -661,40 +761,61 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         [self setStatus:[NSString stringWithFormat:@"Audio unavailable: %s", dvc100_strerror(r)]];
         return;
     }
-    _engine = [AVAudioEngine new];
-    AVAudioFormat *fmt = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:g_audio_rate channels:2];
-    const uint64_t target = (uint64_t)g_audio_rate * 60 / 1000, maxlag = (uint64_t)g_audio_rate / 4;
-    AVAudioSourceNode *src = [[AVAudioSourceNode alloc]
-        initWithFormat:fmt
-           renderBlock:^OSStatus(BOOL *silence, const AudioTimeStamp *ts, AVAudioFrameCount n,
-                                 AudioBufferList *abl) {
-               (void)ts;
-               float *L = abl->mBuffers[0].mData, *R = abl->mBuffers[1].mData;
-               uint64_t w = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE), rd = g_ring_r;
-               if (w - rd > maxlag || rd > w)
-                   rd = w > target ? w - target : 0; /* drifted too far behind: resync */
-               int any = 0;
-               for (AVAudioFrameCount i = 0; i < n; i++) {
-                   if (rd < w) {
-                       L[i] = g_ring[(rd % RING_FRAMES) * 2] / 32768.0f;
-                       R[i] = g_ring[(rd % RING_FRAMES) * 2 + 1] / 32768.0f;
-                       rd++;
-                       any = 1;
-                   } else {
-                       L[i] = R[i] = 0;
-                   }
-               }
-               g_ring_r = rd;
-               *silence = !any;
-               return noErr;
-           }];
-    [_engine attachNode:src];
-    NSError *err = nil;
-    [_engine connect:src to:_engine.mainMixerNode format:fmt];
-    _engine.mainMixerNode.outputVolume = _monitorCheck.state == NSControlStateValueOn ? 1 : 0;
+    g_monitor = _monitorCheck.state == NSControlStateValueOn;
     g_ring_r = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE);
-    if (![_engine startAndReturnError:&err])
-        [self setStatus:[@"Audio output: " stringByAppendingString:err.localizedDescription]];
+    if (@available(macOS 10.15, *)) {
+        _engine = [AVAudioEngine new];
+        AVAudioFormat *fmt = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:g_audio_rate channels:2];
+        AVAudioSourceNode *src = [[AVAudioSourceNode alloc]
+            initWithFormat:fmt
+               renderBlock:^OSStatus(BOOL *silence, const AudioTimeStamp *ts, AVAudioFrameCount n,
+                                     AudioBufferList *abl) {
+                   (void)ts;
+                   *silence = !ring_render(abl->mBuffers[0].mData, abl->mBuffers[1].mData, n, 1.0f);
+                   return noErr;
+               }];
+        [_engine attachNode:src];
+        NSError *err = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations" /* the error: variant needs macOS 27 */
+        [_engine connect:src to:_engine.mainMixerNode format:fmt];
+#pragma clang diagnostic pop
+        _engine.mainMixerNode.outputVolume = g_monitor ? 1 : 0;
+        if (![_engine startAndReturnError:&err])
+            [self setStatus:[@"Audio output: " stringByAppendingString:err.localizedDescription]];
+        return;
+    }
+
+    /* macOS 10.11-10.14: the default output unit, which converts the rate itself */
+    AudioComponentDescription desc = { kAudioUnitType_Output, kAudioUnitSubType_DefaultOutput,
+                                       kAudioUnitManufacturer_Apple, 0, 0 };
+    AudioComponent comp = AudioComponentFindNext(NULL, &desc);
+    OSStatus st = comp ? AudioComponentInstanceNew(comp, &_outputUnit) : -1;
+    if (st == noErr) {
+        AudioStreamBasicDescription f = {
+            .mSampleRate = g_audio_rate,
+            .mFormatID = kAudioFormatLinearPCM,
+            .mFormatFlags = kAudioFormatFlagsNativeFloatPacked | kAudioFormatFlagIsNonInterleaved,
+            .mBytesPerPacket = 4, .mFramesPerPacket = 1, .mBytesPerFrame = 4,
+            .mChannelsPerFrame = 2, .mBitsPerChannel = 32,
+        };
+        AURenderCallbackStruct cb = { output_unit_render, NULL };
+        st = AudioUnitSetProperty(_outputUnit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f,
+                                  sizeof(f));
+        if (st == noErr)
+            st = AudioUnitSetProperty(_outputUnit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input,
+                                      0, &cb, sizeof(cb));
+        if (st == noErr)
+            st = AudioUnitInitialize(_outputUnit);
+        if (st == noErr)
+            st = AudioOutputUnitStart(_outputUnit);
+    }
+    if (st != noErr) {
+        if (_outputUnit)
+            AudioComponentInstanceDispose(_outputUnit);
+        _outputUnit = NULL;
+        [self setStatus:[NSString stringWithFormat:@"Audio output failed (error %d)", (int)st]];
+    }
 }
 
 /* ---- shutdown ---- */
@@ -710,10 +831,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [a addButtonWithTitle:@"Cancel"];
     if ([a runModal] != NSAlertFirstButtonReturn)
         return NSTerminateCancel;
-    os_unfair_lock_lock(&_recLock);
+    pthread_mutex_lock(&_recLock);
     recorder_t *rec = _rec;
     _rec = NULL;
-    os_unfair_lock_unlock(&_recLock);
+    pthread_mutex_unlock(&_recLock);
     rec_close(rec);
     return NSTerminateNow;
 }
@@ -724,6 +845,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 {
     [_uiTimer invalidate];
     [_engine stop];
+    if (_outputUnit) {
+        AudioOutputUnitStop(_outputUnit);
+        AudioComponentInstanceDispose(_outputUnit);
+        _outputUnit = NULL;
+    }
     if (_dev)
         dvc100_close(_dev);
     _dev = NULL;

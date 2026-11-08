@@ -153,6 +153,9 @@ const char *dvc100_strerror(int err)
         return "timed out waiting for device";
     if (err == DVC100_ERR_NO_MEMORY)
         return "out of memory";
+    if (err == DVC100_ERR_NO_DRIVER)
+        return "a Dazzle is plugged in, but its video interface (Interface 0) does not use the WinUSB "
+               "driver, so it cannot be opened";
     return libusb_strerror((enum libusb_error)err);
 }
 
@@ -293,6 +296,70 @@ static int ac97_write(dvc100_t *dev, uint8_t reg, uint16_t val)
 
 /* ---- device open/close ---- */
 
+static int is_wanted(const struct libusb_device_descriptor *d, uint16_t vid, uint16_t pid, const char **name)
+{
+    if (vid && pid) {
+        *name = "requested device";
+        return d->idVendor == vid && d->idProduct == pid;
+    }
+    for (size_t i = 0; i < sizeof(known_devices) / sizeof(known_devices[0]); i++)
+        if (d->idVendor == known_devices[i].vid && d->idProduct == known_devices[i].pid) {
+            *name = known_devices[i].name;
+            return 1;
+        }
+    return 0;
+}
+
+/* Walk the bus instead of libusb_open_device_with_vid_pid(), which hides why
+ * a device that is plugged in could not be opened (on Windows: no WinUSB). */
+static libusb_device_handle *find_and_open(libusb_context *ctx, uint16_t vid, uint16_t pid, int *found,
+                                           int *open_err)
+{
+    libusb_device **list;
+    libusb_device_handle *h = NULL;
+    ssize_t n = libusb_get_device_list(ctx, &list);
+    if (n < 0) {
+        *open_err = (int)n;
+        return NULL;
+    }
+    for (ssize_t i = 0; i < n && !h; i++) {
+        struct libusb_device_descriptor d;
+        const char *name = NULL;
+        if (libusb_get_device_descriptor(list[i], &d))
+            continue;
+        if (!is_wanted(&d, vid, pid, &name)) {
+            if (d.idVendor == 0x2304 || d.idVendor == 0x1b80)
+                dbg(1, "skipping unknown device %04x:%04x", d.idVendor, d.idProduct);
+            continue;
+        }
+        (*found)++;
+        int r = libusb_open(list[i], &h);
+        if (r) {
+            dbg(0, "found %s (%04x:%04x) but cannot open it: %s", name, d.idVendor, d.idProduct,
+                libusb_strerror(r));
+            *open_err = r;
+            h = NULL;
+        } else {
+            dbg(1, "found %s (%04x:%04x)", name, d.idVendor, d.idProduct);
+        }
+    }
+    libusb_free_device_list(list, 1);
+    return h;
+}
+
+/* A Dazzle that is present but not usable through libusb: on Windows that
+ * means interface 0 is still on the vendor driver (or none) instead of WinUSB. */
+static int open_failure(int found, int err)
+{
+    if (!found)
+        return DVC100_ERR_NO_DEVICE;
+#ifdef _WIN32
+    if (err == LIBUSB_ERROR_NOT_SUPPORTED || err == LIBUSB_ERROR_NOT_FOUND)
+        return DVC100_ERR_NO_DRIVER;
+#endif
+    return err ? err : DVC100_ERR_NO_DEVICE;
+}
+
 int dvc100_open(dvc100_t **out, uint16_t vid, uint16_t pid)
 {
     dvc100_t *dev = calloc(1, sizeof(*dev));
@@ -304,20 +371,31 @@ int dvc100_open(dvc100_t **out, uint16_t vid, uint16_t pid)
         return r;
     }
 
-    if (vid && pid) {
-        dev->h = libusb_open_device_with_vid_pid(dev->ctx, vid, pid);
-    } else {
-        for (size_t i = 0; i < sizeof(known_devices) / sizeof(known_devices[0]) && !dev->h; i++) {
-            dev->h = libusb_open_device_with_vid_pid(dev->ctx, known_devices[i].vid,
-                                                     known_devices[i].pid);
-            if (dev->h)
-                dbg(1, "found %s", known_devices[i].name);
+    int found = 0, err = 0;
+    dev->h = find_and_open(dev->ctx, vid, pid, &found, &err);
+#ifdef _WIN32
+    if (!dev->h) {
+        /* Without WinUSB, the UsbDk filter driver (if installed) can still reach it */
+        libusb_context *dk = NULL;
+        const struct libusb_init_option opt = { .option = LIBUSB_OPTION_USE_USBDK };
+        if (libusb_init_context(&dk, &opt, 1) == 0) {
+            int dfound = 0, derr = 0;
+            libusb_device_handle *h = find_and_open(dk, vid, pid, &dfound, &derr);
+            if (h) {
+                dbg(1, "opened through UsbDk");
+                libusb_exit(dev->ctx);
+                dev->ctx = dk;
+                dev->h = h;
+            } else {
+                libusb_exit(dk);
+            }
         }
     }
+#endif
     if (!dev->h) {
         libusb_exit(dev->ctx);
         free(dev);
-        return DVC100_ERR_NO_DEVICE;
+        return open_failure(found, err);
     }
 
     libusb_set_auto_detach_kernel_driver(dev->h, 1);
@@ -325,7 +403,7 @@ int dvc100_open(dvc100_t **out, uint16_t vid, uint16_t pid)
     if (r) {
         dbg(0, "cannot claim video interface: %s", libusb_strerror(r));
         dvc100_close(dev);
-        return r;
+        return open_failure(1, r);
     }
     dev->claimed = 1;
     dev->video = (iso_stream_t){ .owner = dev, .iface = VIDEO_IFACE, .ep = VIDEO_EP, .packet = video_packet };

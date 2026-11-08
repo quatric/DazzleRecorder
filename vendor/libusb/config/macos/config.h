@@ -52,7 +52,8 @@
 #define HAVE_NFDS_T 1
 
 /* Define to 1 if you have the `pipe2' function. */
-#define HAVE_PIPE2 1
+/* pipe2() only exists on macOS 27+; the pipe()+fcntl() fallback works everywhere */
+/* #undef HAVE_PIPE2 */
 
 /* Define to 1 if you have the `pthread_condattr_setclock' function. */
 /* #undef HAVE_PTHREAD_CONDATTR_SETCLOCK */
