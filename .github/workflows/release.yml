@@ -17,7 +17,7 @@ jobs:
       - name: Check Universal 2
         run: |
           for f in "build/Dazzle Capture.app/Contents/MacOS/Dazzle Capture" build/dvc100-capture; do
-            lipo "$f" -verify_arch x86_64 arm64
+            lipo "$f" -verify_arch x86_64 && lipo "$f" -verify_arch arm64
             ! otool -L "$f" | grep -q '@rpath/'
           done
       - name: Package
