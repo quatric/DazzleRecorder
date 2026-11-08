@@ -70,7 +70,8 @@ macos-*)
   done
   CROSS="--target-os=linux --arch=$fa --enable-cross-compile --cc=$BLD/zig-cc --ar=$BLD/zig-ar
     --ranlib=$BLD/zig-ranlib --nm=${NM:-llvm-nm} --strip=${STRIP:-llvm-strip} --extra-ldflags=-static"
-  [ $arch = arm ] && CROSS="$CROSS --cpu=armv7-a --enable-neon"
+  # baseline armhf like the rest of the build (ARMv6 boards too), so no NEON
+  [ $arch = arm ] && CROSS="$CROSS --disable-neon"
   ;;
 *) echo "unknown target $TARGET" >&2; exit 1 ;;
 esac

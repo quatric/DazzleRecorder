@@ -48,7 +48,7 @@ $V/os/threads_windows.c $V/os/windows_common.c $V/os/windows_usbdk.c $V/os/windo
     aarch64-*) wcc=$WIN_CC_aarch64; karch=;      ff=aarch64-windows ;;
     esac
     if [ -n "$wcc" ]; then
-      CC="$wcc"; LIBS="$LIBS -static"
+      CC="$wcc"; LIBS="$LIBS -static -lpthread"
     elif [ -n "$karch" ]; then
       echo "warning: $name built with Zig links the Universal CRT and will not start on a stock Windows 7" >&2
     fi
