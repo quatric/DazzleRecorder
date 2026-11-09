@@ -21,10 +21,24 @@
 
 /* ---- 10.9 compatibility: the API added in 10.10 and 10.11 is used only where it exists ---- */
 
+/* NSStackView's +stackViewWithViews: is 10.12 and -setCustomSpacing:afterView: is 10.11; -setViews:inGravity: is 10.9 */
+static NSStackView *stack(NSArray<NSView *> *views)
+{
+    NSStackView *s = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    [s setViews:views inGravity:NSStackViewGravityLeading];
+    return s;
+}
+
+static void gap_after(NSStackView *s, CGFloat gap, NSView *v)
+{
+    if ([s respondsToSelector:@selector(setCustomSpacing:afterView:)])
+        [s setCustomSpacing:gap afterView:v];
+}
+
 static NSColor *label_color(BOOL secondary)
 {
     if (@available(macOS 10.10, *))
-        return secondary ? label_color(YES) : NSColor.labelColor;
+        return secondary ? [NSColor secondaryLabelColor] : [NSColor labelColor];
     return secondary ? NSColor.disabledControlTextColor : NSColor.controlTextColor;
 }
 
@@ -437,14 +451,14 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     set_active(mk(_folderButton, NSLayoutAttributeWidth, NSLayoutRelationLessThanOrEqual, nil, 0, 1, 220), YES);
     [self updateFolderButton];
 
-    NSStackView *row1 = [NSStackView stackViewWithViews:@[
+    NSStackView *row1 = stack(@[
         [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, [self label:@"Quality"], _qualityPopup,
         [self label:@"Save to"], _folderButton
-    ]];
+    ]);
     row1.spacing = 8;
-    [row1 setCustomSpacing:16 afterView:_inputPopup];
-    [row1 setCustomSpacing:16 afterView:_wideCheck];
-    [row1 setCustomSpacing:16 afterView:_qualityPopup];
+    gap_after(row1, 16, _inputPopup);
+    gap_after(row1, 16, _wideCheck);
+    gap_after(row1, 16, _qualityPopup);
 
     /* row 2: record button, time, meters, monitor */
     _recordButton = make_button(@"Record", self, @selector(toggleRecord:), NO);
@@ -461,10 +475,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
     _meterL = [self meter];
     _meterR = [self meter];
-    NSStackView *meters = [NSStackView stackViewWithViews:@[
-        [NSStackView stackViewWithViews:@[ [self label:@"L"], _meterL ]],
-        [NSStackView stackViewWithViews:@[ [self label:@"R"], _meterR ]]
-    ]];
+    NSStackView *meters = stack(@[
+        stack(@[ [self label:@"L"], _meterL ]),
+        stack(@[ [self label:@"R"], _meterR ])
+    ]);
     meters.orientation = NSUserInterfaceLayoutOrientationVertical;
     meters.spacing = 2;
     meters.alignment = NSLayoutAttributeLeading;
@@ -479,10 +493,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [_statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *row2 = [NSStackView stackViewWithViews:@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]];
+    NSStackView *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
     row2.spacing = 16;
 
-    NSStackView *bar = [NSStackView stackViewWithViews:@[ row1, row2 ]];
+    NSStackView *bar = stack(@[ row1, row2 ]);
     bar.orientation = NSUserInterfaceLayoutOrientationVertical;
     bar.alignment = NSLayoutAttributeLeading;
     bar.spacing = 8;
