@@ -1,5 +1,5 @@
 /*
- * Dazzle Capture for Linux: a plain Xlib window with the live preview, level
+ * DazzleRecorder for Linux: a plain Xlib window with the live preview, level
  * meters and the same controls as the Windows and macOS apps. libX11 is
  * loaded at run time, so it builds without any X headers or libraries and
  * runs on X11 and under Wayland through XWayland. The Xlib types used here

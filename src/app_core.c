@@ -1,4 +1,4 @@
-/* Dazzle Capture engine for the Windows and Linux GUIs; see app_core.h. */
+/* DazzleRecorder engine for the Windows and Linux GUIs; see app_core.h. */
 #include "app_core.h"
 #include "recorder.h"
 #include "sysaudio.h"

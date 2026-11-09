@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the small, static, LGPL ffmpeg that is bundled with Dazzle Capture.
+# Builds the small, static, LGPL ffmpeg that is bundled with DazzleRecorder.
 # It holds only what the recorder uses (src/recorder.c): y4m video and s16le
 # audio in through pipes, yadif/setfield/scale, MPEG-2 video, MP2 audio and
 # the DVD program stream muxer.

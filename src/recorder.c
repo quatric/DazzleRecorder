@@ -487,7 +487,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
 #ifdef _WIN32
                  "ffmpeg.exe not found (it ships next to this program; or put one on PATH, or set DVC100_FFMPEG)"
 #elif defined(__APPLE__)
-                 "ffmpeg not found (it ships inside Dazzle Capture.app; or brew install ffmpeg, or set DVC100_FFMPEG)"
+                 "ffmpeg not found (it ships inside DazzleRecorder.app; or brew install ffmpeg, or set DVC100_FFMPEG)"
 #else
                  "ffmpeg not found (install the ffmpeg package, or set DVC100_FFMPEG)"
 #endif

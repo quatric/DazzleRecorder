@@ -1,5 +1,5 @@
 /*
- * Dazzle Capture engine shared by the Windows and Linux GUIs (the macOS app
+ * DazzleRecorder engine shared by the Windows and Linux GUIs (the macOS app
  * does the same in Cocoa): device, preview frames, audio monitoring and
  * meters, MPEG-2 recording, snapshots and settings. Everything here is
  * thread safe; the GUI polls it from a timer.
@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-#define APP_NAME "Dazzle Capture"
+#define APP_NAME "DazzleRecorder"
 
 typedef struct app app_t;
 
@@ -50,7 +50,7 @@ double app_record_seconds(app_t *a);
 /* Saves the current picture as a square-pixel PNG (640x480 or 768x576). */
 int app_snapshot(app_t *a, const char *folder, char *path, int pathlen, char *err, int errlen);
 
-/* "Dazzle Capture 2026-10-30 at 21.05.33.ext" in folder. */
+/* "DazzleRecorder 2026-10-30 at 21.05.33.ext" in folder. */
 void app_timestamped_path(const char *folder, const char *ext, char *out, int len);
 
 /* Settings: key=value lines in the user's config folder. */

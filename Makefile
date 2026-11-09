@@ -19,7 +19,7 @@ SYSLIBS  = -framework IOKit -framework CoreFoundation -framework Security \
 
 BUILD   = build
 LIBUSB  = $(BUILD)/libusb-1.0.a
-APP     = $(BUILD)/Dazzle Capture.app
+APP     = $(BUILD)/DazzleRecorder.app
 # A small LGPL ffmpeg (scripts/build-ffmpeg.sh) goes into the app and next to the
 # command line tool, so recording needs nothing installed. BUNDLE_FFMPEG=0 skips it.
 BUNDLE_FFMPEG ?= 1
@@ -74,7 +74,7 @@ app: $(BUILD)/dazzle-capture-app resources/Info.plist resources/AppIcon.icns $(i
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	sed 's/@MACOSX_MIN@/$(MACOSX_MIN)/' resources/Info.plist > "$(APP)/Contents/Info.plist"
 	cp resources/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
-	cp $(BUILD)/dazzle-capture-app "$(APP)/Contents/MacOS/Dazzle Capture"
+	cp $(BUILD)/dazzle-capture-app "$(APP)/Contents/MacOS/DazzleRecorder"
 	if [ "$(BUNDLE_FFMPEG)" = 1 ]; then \
 	    cp $(FFMPEG) "$(APP)/Contents/MacOS/ffmpeg" && \
 	    mkdir -p "$(APP)/Contents/Resources/licenses" && cp resources/licenses/* "$(APP)/Contents/Resources/licenses/"; fi

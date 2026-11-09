@@ -1,4 +1,4 @@
-The ffmpeg program included with Dazzle Capture is FFmpeg 7.1.5
+The ffmpeg program included with DazzleRecorder is FFmpeg 7.1.5
 (https://ffmpeg.org), licensed under the GNU Lesser General Public License
 version 2.1 or later (see FFmpeg-COPYING.LGPLv2.1.txt).
 

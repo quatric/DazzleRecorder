@@ -1,5 +1,5 @@
 #!/bin/sh
-# Cross-builds the Dazzle Capture command line tool (and the GUI) for Windows
+# Cross-builds the DazzleRecorder command line tool (and the GUI) for Windows
 # and Linux. Nothing else is needed: libusb is vendored and ALSA is loaded at
 # run time.
 #   ZIG=/path/to/zig scripts/build-all.sh [target ...]
@@ -69,7 +69,7 @@ $V/os/threads_posix.c $V/os/linux_usbfs.c $V/os/linux_netlink.c"
   echo "== $name ($CC)"
   $CC $COMMON $FL $LU $SRC $OSSRC src/capture.c $LIBS -o "$OUT/$name/dvc100-capture$ext"
   if [ -f "$GUI" ]; then
-    $CC $COMMON $FL $LU $SRC $OSSRC $GUI $GUILIBS $LIBS -o "$OUT/$name/Dazzle Capture$ext"
+    $CC $COMMON $FL $LU $SRC $OSSRC $GUI $GUILIBS $LIBS -o "$OUT/$name/DazzleRecorder$ext"
   fi
   if [ $os = windows ]; then
     # Zadig-style driver installer, plus the libusbK driver for Windows 7/8.0

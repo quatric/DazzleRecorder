@@ -1,5 +1,5 @@
 /*
- * Dazzle Capture: live preview and MPEG-2 recording for the Dazzle DVC100.
+ * DazzleRecorder: live preview and MPEG-2 recording for the Dazzle DVC100.
  *
  * The control bar under the preview selects the input, deinterlacing,
  * recording quality and folder, and starts/stops recording to a
@@ -7,6 +7,7 @@
  */
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 #import <CoreImage/CoreImage.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
@@ -20,20 +21,6 @@
 /* ---- AppKit helpers: the modern convenience constructors need 10.12+, SF Symbols 11+ ---- */
 
 /* ---- 10.9 compatibility: the API added in 10.10 and 10.11 is used only where it exists ---- */
-
-/* NSStackView's +stackViewWithViews: is 10.12 and -setCustomSpacing:afterView: is 10.11; -setViews:inGravity: is 10.9 */
-static NSStackView *stack(NSArray<NSView *> *views)
-{
-    NSStackView *s = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    [s setViews:views inGravity:NSStackViewGravityLeading];
-    return s;
-}
-
-static void gap_after(NSStackView *s, CGFloat gap, NSView *v)
-{
-    if ([s respondsToSelector:@selector(setCustomSpacing:afterView:)])
-        [s setCustomSpacing:gap afterView:v];
-}
 
 static NSColor *label_color(BOOL secondary)
 {
@@ -121,6 +108,163 @@ static void set_symbol(NSButton *b, NSString *name, NSString *desc)
         b.image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:desc];
         b.imagePosition = NSImageLeading;
     }
+}
+
+/*
+ * The control bar is laid out by this small row/column view rather than NSStackView: 10.9's NSStackView
+ * sizes and clips its views differently from 10.10 and later, and there it left the bar with no room
+ * under the preview. A Box measures its views (their intrinsic sizes, or the limits set with
+ * limit_size) and places them by frame, which works the same on every macOS since 10.7.
+ */
+static char kSizeLimits;
+
+/* min and max width (0: none) and a fixed height (0: its own) for a view in a Box */
+static void limit_size(NSView *v, CGFloat minw, CGFloat maxw, CGFloat h)
+{
+    objc_setAssociatedObject(v, &kSizeLimits, @[ @(minw), @(maxw), @(h) ], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+@interface Box : NSView
+@property(nonatomic) NSUserInterfaceLayoutOrientation orientation; /* rows center their views, columns align them left */
+@property(nonatomic) CGFloat spacing;
+@property(nonatomic) NSEdgeInsets edgeInsets;
+@property(nonatomic, weak) NSView *flexible; /* in a row: gets the width the others leave */
+- (void)setGap:(CGFloat)gap afterView:(NSView *)v;
+- (NSSize)naturalSize;
+- (void)place;
+- (void)refit; /* after a view's title changes */
+@end
+
+static NSSize natural_size(NSView *v)
+{
+    if ([v isKindOfClass:Box.class])
+        return [(Box *)v naturalSize];
+    NSSize s = v.intrinsicContentSize;
+    /* a label's cell adds the few points of padding its intrinsic width leaves out */
+    if ([v isKindOfClass:NSTextField.class])
+        s.width = MAX(s.width, [[(NSTextField *)v cell] cellSize].width);
+    if (s.width == NSViewNoIntrinsicMetric || s.width < 0)
+        s.width = v.frame.size.width;
+    if (s.height == NSViewNoIntrinsicMetric || s.height < 0)
+        s.height = v.frame.size.height;
+    NSArray<NSNumber *> *lim = objc_getAssociatedObject(v, &kSizeLimits);
+    if (lim) {
+        s.width = MAX(s.width, lim[0].doubleValue);
+        if (lim[1].doubleValue > 0)
+            s.width = MIN(s.width, lim[1].doubleValue);
+        if (lim[2].doubleValue > 0)
+            s.height = lim[2].doubleValue;
+    }
+    return NSMakeSize(ceil(s.width), ceil(s.height));
+}
+
+@implementation Box {
+    NSMutableDictionary<NSValue *, NSNumber *> *_gaps;
+}
+- (instancetype)initWithFrame:(NSRect)frame
+{
+    if ((self = [super initWithFrame:frame])) {
+        _orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        _spacing = 8;
+        _gaps = [NSMutableDictionary new];
+    }
+    return self;
+}
+- (BOOL)isFlipped { return YES; }
+- (void)setGap:(CGFloat)gap afterView:(NSView *)v
+{
+    _gaps[[NSValue valueWithNonretainedObject:v]] = @(gap);
+}
+- (CGFloat)gapAfter:(NSView *)v
+{
+    NSNumber *g = _gaps[[NSValue valueWithNonretainedObject:v]];
+    return g ? g.doubleValue : _spacing;
+}
+- (BOOL)horizontal { return _orientation == NSUserInterfaceLayoutOrientationHorizontal; }
+- (NSSize)naturalSize
+{
+    CGFloat along = 0, across = 0;
+    NSArray<NSView *> *views = self.subviews;
+    for (NSView *v in views) {
+        NSSize s = natural_size(v);
+        if (v == _flexible)
+            s.width = 0;
+        along += self.horizontal ? s.width : s.height;
+        across = MAX(across, self.horizontal ? s.height : s.width);
+        if (v != views.lastObject)
+            along += [self gapAfter:v];
+    }
+    NSEdgeInsets in = _edgeInsets;
+    return self.horizontal ? NSMakeSize(along + in.left + in.right, across + in.top + in.bottom)
+                           : NSMakeSize(across + in.left + in.right, along + in.top + in.bottom);
+}
+/* the bar keeps the window at least as wide as its rows (the flexible label aside) */
+- (NSSize)intrinsicContentSize
+{
+    return self.naturalSize;
+}
+- (void)place
+{
+    NSEdgeInsets in = _edgeInsets;
+    NSRect r = NSMakeRect(in.left, in.top, MAX(0, self.bounds.size.width - in.left - in.right),
+                          MAX(0, self.bounds.size.height - in.top - in.bottom));
+    NSArray<NSView *> *views = self.subviews;
+    CGFloat extra = r.size.width;
+    if (self.horizontal) {
+        for (NSView *v in views) {
+            if (v != _flexible)
+                extra -= natural_size(v).width;
+            if (v != views.lastObject)
+                extra -= [self gapAfter:v];
+        }
+    }
+    CGFloat pos = self.horizontal ? NSMinX(r) : NSMinY(r);
+    for (NSView *v in views) {
+        NSSize s = natural_size(v);
+        NSRect f;
+        if (self.horizontal) {
+            if (v == _flexible)
+                s.width = MAX(0, extra);
+            f = NSMakeRect(pos, NSMinY(r) + round((r.size.height - s.height) / 2), s.width, s.height);
+            pos += s.width;
+        } else {
+            if ([v isKindOfClass:Box.class])
+                s.width = r.size.width; /* a row in a column gets the column's width */
+            f = NSMakeRect(NSMinX(r), pos, s.width, s.height);
+            pos += s.height;
+        }
+        pos += [self gapAfter:v];
+        v.frame = f;
+        if ([v isKindOfClass:Box.class])
+            [(Box *)v place];
+    }
+}
+- (void)layout
+{
+    [super layout];
+    [self place];
+}
+- (void)refit
+{
+    [self invalidateIntrinsicContentSize];
+    self.needsLayout = YES;
+}
+- (void)resizeSubviewsWithOldSize:(NSSize)old
+{
+    (void)old;
+    [self place];
+}
+@end
+
+static Box *stack(NSArray<NSView *> *views)
+{
+    Box *b = [[Box alloc] initWithFrame:NSZeroRect];
+    for (NSView *v in views) {
+        v.translatesAutoresizingMaskIntoConstraints = YES;
+        v.autoresizingMask = NSViewNotSizable;
+        [b addSubview:v];
+    }
+    return b;
 }
 
 /* ---- preview view: keeps the picture at 4:3 (or stretched to 16:9) inside whatever space it has ---- */
@@ -213,6 +357,7 @@ static volatile int g_peak[2];
 
     NSPopUpButton *_inputPopup, *_qualityPopup;
     NSButton *_deintCheck, *_wideCheck, *_monitorCheck, *_recordButton, *_folderButton;
+    Box *_bar;
     NSTextField *_timeLabel, *_statusLabel;
     NSLevelIndicator *_meterL, *_meterR;
     NSTimer *_uiTimer;
@@ -405,8 +550,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     m.maxValue = 60; /* dBFS + 60 */
     m.warningValue = 48;
     m.criticalValue = 57;
-    set_active(mk(m, NSLayoutAttributeWidth, NSLayoutRelationEqual, nil, 0, 1, 90), YES);
-    set_active(mk(m, NSLayoutAttributeHeight, NSLayoutRelationEqual, nil, 0, 1, 8), YES);
+    limit_size(m, 90, 90, 8);
     return m;
 }
 
@@ -419,7 +563,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
                     backing:NSBackingStoreBuffered
                       defer:NO];
     _window.delegate = self;
-    _window.title = @"Dazzle Capture";
+    _window.title = @"DazzleRecorder";
     _window.frameAutosaveName = @"DazzleCaptureWindow";
 
     _preview = [[DVCPreview alloc] initWithFrame:NSZeroRect];
@@ -448,17 +592,17 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _folderButton = make_button(@"", self, @selector(chooseFolder:), NO);
     _folderButton.bezelStyle = NSBezelStyleRounded;
     set_symbol(_folderButton, @"folder", @"Folder");
-    set_active(mk(_folderButton, NSLayoutAttributeWidth, NSLayoutRelationLessThanOrEqual, nil, 0, 1, 220), YES);
+    limit_size(_folderButton, 0, 220, 0);
     [self updateFolderButton];
 
-    NSStackView *row1 = stack(@[
+    Box *row1 = stack(@[
         [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, [self label:@"Quality"], _qualityPopup,
         [self label:@"Save to"], _folderButton
     ]);
     row1.spacing = 8;
-    gap_after(row1, 16, _inputPopup);
-    gap_after(row1, 16, _wideCheck);
-    gap_after(row1, 16, _qualityPopup);
+    [row1 setGap:16 afterView:_inputPopup];
+    [row1 setGap:16 afterView:_wideCheck];
+    [row1 setGap:16 afterView:_qualityPopup];
 
     /* row 2: record button, time, meters, monitor */
     _recordButton = make_button(@"Record", self, @selector(toggleRecord:), NO);
@@ -468,20 +612,19 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         _recordButton.contentTintColor = NSColor.systemRedColor;
     _recordButton.keyEquivalent = @"r";
     _recordButton.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    set_active(mk(_recordButton, NSLayoutAttributeWidth, NSLayoutRelationGreaterThanOrEqual, nil, 0, 1, 110), YES);
+    limit_size(_recordButton, 110, 0, 0);
 
     _timeLabel = make_label(@"00:00:00");
     _timeLabel.font = mono_font(15, NO);
 
     _meterL = [self meter];
     _meterR = [self meter];
-    NSStackView *meters = stack(@[
+    Box *meters = stack(@[
         stack(@[ [self label:@"L"], _meterL ]),
         stack(@[ [self label:@"R"], _meterR ])
     ]);
     meters.orientation = NSUserInterfaceLayoutOrientationVertical;
     meters.spacing = 2;
-    meters.alignment = NSLayoutAttributeLeading;
 
     _monitorCheck = make_button(@"Play audio", self, @selector(monitorChanged:), YES);
     _monitorCheck.state = [NSUserDefaults.standardUserDefaults boolForKey:@"monitor"] ? NSControlStateValueOn
@@ -490,18 +633,17 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _statusLabel = make_label(@"");
     _statusLabel.textColor = label_color(YES);
     [_statusLabel.cell setLineBreakMode:NSLineBreakByTruncatingMiddle];
-    [_statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                           forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
+    Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
+    row2.flexible = _statusLabel;
     row2.spacing = 16;
 
-    NSStackView *bar = stack(@[ row1, row2 ]);
+    Box *bar = stack(@[ row1, row2 ]);
     bar.orientation = NSUserInterfaceLayoutOrientationVertical;
-    bar.alignment = NSLayoutAttributeLeading;
     bar.spacing = 8;
     bar.edgeInsets = NSEdgeInsetsMake(10, 12, 10, 12);
     bar.translatesAutoresizingMaskIntoConstraints = NO;
+    _bar = bar;
 
     NSView *content = [NSView new];
     [content addSubview:_preview];
@@ -516,7 +658,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         mk(bar, NSLayoutAttributeBottom, NSLayoutRelationEqual, content, NSLayoutAttributeBottom, 1, 0),
         mk(_preview, NSLayoutAttributeWidth, NSLayoutRelationGreaterThanOrEqual, nil, 0, 1, 720),
     ]);
-    [bar setHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
+    [bar setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
+    [bar setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [bar setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                  forOrientation:NSLayoutConstraintOrientationVertical];
     _preview.widescreen = _widescreen;
     [self applyAspect];
     _window.contentView = content;
@@ -532,7 +678,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     NSMenuItem *appItem = [NSMenuItem new];
     [bar addItem:appItem];
     NSMenu *appMenu = [NSMenu new];
-    [appMenu addItemWithTitle:@"Quit Dazzle Capture" action:@selector(terminate:) keyEquivalent:@"q"];
+    [appMenu addItemWithTitle:@"Quit DazzleRecorder" action:@selector(terminate:) keyEquivalent:@"q"];
     appItem.submenu = appMenu;
 
     NSMenuItem *fileItem = [NSMenuItem new];
@@ -558,13 +704,14 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (void)updateTitle
 {
-    _window.title = [NSString stringWithFormat:@"Dazzle Capture — %@ %@", _inputPopup.titleOfSelectedItem ?: @"",
+    _window.title = [NSString stringWithFormat:@"DazzleRecorder — %@ %@", _inputPopup.titleOfSelectedItem ?: @"",
                                                _pal ? @"PAL 720×576" : @"NTSC 720×480"];
 }
 
 - (void)updateFolderButton
 {
     _folderButton.title = _folder.lastPathComponent ?: @"Movies";
+    [_bar refit];
     _folderButton.toolTip = _folder.path;
 }
 
@@ -663,7 +810,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     static const int kbps[] = { 6000, 8000, 9500 };
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
-    NSString *name = [NSString stringWithFormat:@"Dazzle Capture %@.mpg", [df stringFromDate:NSDate.date]];
+    NSString *name = [NSString stringWithFormat:@"DazzleRecorder %@.mpg", [df stringFromDate:NSDate.date]];
     NSString *path = [_folder URLByAppendingPathComponent:name].path;
 
     recorder_opts_t o = {
@@ -693,6 +840,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _recDeinterlaced = o.deinterlace;
 
     _recordButton.title = @"Stop";
+
+    [_bar refit];
     set_symbol(_recordButton, @"stop.circle.fill", nil);
     _deintCheck.enabled = _wideCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = NO;
     _preview.badge.hidden = NO;
@@ -712,12 +861,14 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     NSString *path = _recPath;
     _recordButton.enabled = NO;
     _recordButton.title = @"Finishing…";
+    [_bar refit];
     [self setStatus:@"Finishing the file…"];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         int r = rec_close(rec);
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_recordButton.enabled = YES;
             self->_recordButton.title = @"Record";
+            [self->_bar refit];
             set_symbol(self->_recordButton, @"record.circle", nil);
             self->_deintCheck.enabled = self->_wideCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = YES;
             self->_preview.badge.hidden = YES;
@@ -779,7 +930,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     CIContext *ctx = [CIContext context];
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
-    NSString *name = [NSString stringWithFormat:@"Dazzle Capture %@.png", [df stringFromDate:NSDate.date]];
+    NSString *name = [NSString stringWithFormat:@"DazzleRecorder %@.png", [df stringFromDate:NSDate.date]];
     NSURL *url = [_folder URLByAppendingPathComponent:name];
     CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     NSError *err = nil;
@@ -863,10 +1014,10 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
 
 - (void)microphoneDenied
 {
-    [self setStatus:@"No sound: microphone access is off for Dazzle Capture (System Settings > Privacy & Security > Microphone)"];
+    [self setStatus:@"No sound: microphone access is off for DazzleRecorder (System Settings > Privacy & Security > Microphone)"];
     NSAlert *a = [NSAlert new];
-    a.messageText = @"Dazzle Capture needs microphone access";
-    a.informativeText = @"macOS treats the Dazzle's audio input as a microphone. Turn on Dazzle Capture under "
+    a.messageText = @"DazzleRecorder needs microphone access";
+    a.informativeText = @"macOS treats the Dazzle's audio input as a microphone. Turn on DazzleRecorder under "
                         @"Privacy & Security > Microphone, then restart the app, or you will record without sound.";
     [a addButtonWithTitle:@"Open Settings"];
     [a addButtonWithTitle:@"Continue Without Sound"];

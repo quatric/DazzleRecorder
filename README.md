@@ -25,14 +25,14 @@ see [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md).
 
 Prebuilt macOS, Windows and Linux builds are on the
 [Releases](https://github.com/quatric/DazzleRecorder/releases) page. Each one contains the command line
-tool `dvc100-capture`, the GUI `Dazzle Capture` (a live preview with sound, input selection and recording;
-see [Dazzle Capture (app)](#dazzle-capture-app)) and a small `ffmpeg` for recording, so nothing else needs
+tool `dvc100-capture`, the GUI `DazzleRecorder` (a live preview with sound, input selection and recording;
+see [DazzleRecorder (app)](#dazzlerecorder-app)) and a small `ffmpeg` for recording, so nothing else needs
 to be installed.
 
 ### macOS
 
 Download `DazzleRecorder-macos-universal-app.zip` (Universal 2: Apple silicon and Intel, macOS 10.9 Mavericks
-or later), unzip it and open **Dazzle Capture**. The app
+or later), unzip it and open **DazzleRecorder**. The app
 is ad-hoc signed, not notarized, so the first time right-click it and choose **Open** (or allow it under
 System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle.
 `DazzleRecorder-macos-universal.tar.gz` also contains the command line tool and its `ffmpeg`.
@@ -48,7 +48,7 @@ Windows 7 SP1 and later, 32- and 64-bit, and Windows on Arm.
    signed libusbK driver on Windows 7 and 8.0, whose WinUSB cannot stream video. The sound interface keeps
    Windows' own audio driver. Windows SmartScreen may warn about an unsigned installer: choose More info →
    Run anyway.
-3. Start **Dazzle Capture** from the Start menu. If the Dazzle was not plugged in during setup, or it still
+3. Start **DazzleRecorder** from the Start menu. If the Dazzle was not plugged in during setup, or it still
    has the manufacturer's driver, the app offers to install the driver when it starts (this needs
    administrator rights).
 
@@ -72,13 +72,13 @@ If the [UsbDk](https://github.com/daynix/UsbDk/releases) driver is installed, th
    ```
 
 3. ALSA is needed for sound (present on most desktops). The bundled static `ffmpeg` is used for recording.
-4. Run `./"Dazzle Capture"`. The GUI uses X11 and also runs under XWayland.
+4. Run `./DazzleRecorder`. The GUI uses X11 and also runs under XWayland.
 
 ## Build (macOS)
 
 ```bash
 brew install nasm     # for ffmpeg's x86 assembly
-make            # build/dvc100-capture, build/ffmpeg and "build/Dazzle Capture.app" (Universal 2, macOS 10.9+)
+make            # build/dvc100-capture, build/ffmpeg and "build/DazzleRecorder.app" (Universal 2, macOS 10.9+)
 make test       # packet/field assembler unit test
 ```
 
@@ -88,9 +88,9 @@ uses an ffmpeg on your `PATH` instead. `make ARCHS=arm64 MACOSX_MIN=11.0` builds
 
 ## Use
 
-### Dazzle Capture (app)
+### DazzleRecorder (app)
 
-On macOS run `open "build/Dazzle Capture.app"`; on Windows and Linux run the `Dazzle Capture` executable.
+On macOS run `open "build/DazzleRecorder.app"`; on Windows and Linux run the `DazzleRecorder` executable.
 
 The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live preview with sound, and a control bar for:
 
@@ -102,7 +102,7 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
   uses ffmpeg's yadif and suits computer playback and editing.
 * **Quality**: 6, 8 or 9.5 Mbit/s MPEG-2 video (DVD-legal), 224 kbit/s MP2 stereo audio
 * **Save to**: recording folder (default: your Movies or Videos folder)
-* **Record / Stop** (⌘R on macOS): writes `Dazzle Capture <date>.mpg`, a DVD-compatible
+* **Record / Stop** (⌘R on macOS): writes `DazzleRecorder <date>.mpg`, a DVD-compatible
   MPEG-2 program stream with a 4:3 display aspect (16:9 with Widescreen)
 * L/R audio meters, **Play audio** to monitor through the speakers, ⌘S saves a PNG snapshot
 
@@ -169,7 +169,7 @@ ZIG=/path/to/zig scripts/build-all.sh aarch64-linux-gnu.2.31   # one target
 ```
 
 Targets: Windows x86_64, x86 and arm64; Linux x86_64, x86, arm64 and armhf (glibc 2.31) plus x86_64 and arm64
-(musl). Each folder has `dvc100-capture` (command line), `Dazzle Capture` (GUI: Win32 on Windows, Xlib on
+(musl). Each folder has `dvc100-capture` (command line), `DazzleRecorder` (GUI: Win32 on Windows, Xlib on
 Linux, which also runs under XWayland) and a static `ffmpeg` (`BUNDLE_FFMPEG=0` skips it).
 
 For Windows 7, the Windows builds must use an msvcrt-based MinGW toolchain, because Zig links the Universal

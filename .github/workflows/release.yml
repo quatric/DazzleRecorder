@@ -17,21 +17,21 @@ jobs:
       - run: make all test
       - name: Check Universal 2 and macOS 10.9
         run: |
-          for f in "build/Dazzle Capture.app/Contents/MacOS/Dazzle Capture" \
-                   "build/Dazzle Capture.app/Contents/MacOS/ffmpeg" build/dvc100-capture build/ffmpeg; do
+          for f in "build/DazzleRecorder.app/Contents/MacOS/DazzleRecorder" \
+                   "build/DazzleRecorder.app/Contents/MacOS/ffmpeg" build/dvc100-capture build/ffmpeg; do
             lipo "$f" -verify_arch x86_64 && lipo "$f" -verify_arch arm64
             ! otool -L "$f" | grep -q '@rpath/'
           done
           # the Intel slice must still load on 10.9 (the Apple silicon slice is 11.0 by definition)
-          for f in "build/Dazzle Capture.app/Contents/MacOS/Dazzle Capture" build/dvc100-capture; do
+          for f in "build/DazzleRecorder.app/Contents/MacOS/DazzleRecorder" build/dvc100-capture; do
             otool -arch x86_64 -l "$f" | grep -A2 LC_VERSION_MIN_MACOSX | grep -q 'version 10.9'
           done
-          codesign -v --strict "build/Dazzle Capture.app"
+          codesign -v --strict "build/DazzleRecorder.app"
       - name: Package
         run: |
           mkdir -p out/stage
-          cp -R "build/Dazzle Capture.app" build/dvc100-capture build/ffmpeg resources/licenses out/stage/
-          ditto -c -k --keepParent "build/Dazzle Capture.app" out/DazzleRecorder-macos-universal-app.zip
+          cp -R "build/DazzleRecorder.app" build/dvc100-capture build/ffmpeg resources/licenses out/stage/
+          ditto -c -k --keepParent "build/DazzleRecorder.app" out/DazzleRecorder-macos-universal-app.zip
           tar -C out/stage -czf out/DazzleRecorder-macos-universal.tar.gz .
           rm -rf out/stage
       - uses: actions/upload-artifact@v4

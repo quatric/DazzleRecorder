@@ -143,7 +143,7 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
     CFStringRef uid = dev_string(id, kAudioDevicePropertyDeviceUID);
     if (AudioQueueNewInput(&f, input_cb, c, NULL, NULL, 0, &c->q) || !uid ||
         AudioQueueSetProperty(c->q, kAudioQueueProperty_CurrentDevice, &uid, sizeof(uid))) {
-        sa_set_error("macOS would not open the Dazzle's sound input (allow Dazzle Capture under System Settings "
+        sa_set_error("macOS would not open the Dazzle's sound input (allow DazzleRecorder under System Settings "
                      "> Privacy & Security > Microphone)");
         if (uid)
             CFRelease(uid);
@@ -162,7 +162,7 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
             AudioQueueEnqueueBuffer(c->q, b, 0, NULL);
     }
     if (AudioQueueStart(c->q, NULL)) {
-        sa_set_error("macOS would not start the Dazzle's sound input (allow Dazzle Capture under System Settings "
+        sa_set_error("macOS would not start the Dazzle's sound input (allow DazzleRecorder under System Settings "
                      "> Privacy & Security > Microphone)");
         AudioQueueDispose(c->q, true);
         free(c);

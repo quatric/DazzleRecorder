@@ -1,5 +1,5 @@
 /*
- * Dazzle Capture for Windows: live preview and MPEG-2 recording, plain
+ * DazzleRecorder for Windows: live preview and MPEG-2 recording, plain
  * Win32 so it runs on any Windows 8.1+ PC (x64, x86, ARM64) without a runtime.
  *
  * The control bar under the preview selects the input, deinterlacing,
@@ -579,7 +579,7 @@ static void run_driver_installer(void)
     se.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&se) || !se.hProcess) {
         if (GetLastError() != ERROR_CANCELLED)
-            MessageBoxW(NULL, L"Could not start dazzle-driver.exe. It should be in the same folder as Dazzle Capture.",
+            MessageBoxW(NULL, L"Could not start dazzle-driver.exe. It should be in the same folder as DazzleRecorder.",
                         L"Dazzle driver", MB_ICONERROR);
         return;
     }
@@ -667,7 +667,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     RECT r = { 0, 0, S(960), S(600 + BAR_H) };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, TRUE);
-    G.wnd = CreateWindowExW(0, L"DazzleCapture", L"Dazzle Capture", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    G.wnd = CreateWindowExW(0, L"DazzleCapture", L"DazzleRecorder", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                             CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, inst,
                             NULL);
     build_menu();
