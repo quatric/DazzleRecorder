@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: apt-get update && apt-get install -y clang git nasm pkgconf curl xz-utils zip
-      - run: VERSION=$(case $GITHUB_REF in refs/tags/v*) echo ${GITHUB_REF_NAME#v} ;; *) echo 0.0.0-dev ;; esac) scripts/build-legacy-mac.sh
+      - run: VERSION=$(case $GITHUB_REF in (refs/tags/v*) echo ${GITHUB_REF_NAME#v} ;; (*) echo 0.0.0-dev ;; esac) scripts/build-legacy-mac.sh
       - name: Check PowerPC and i386
         run: |
           T=powerpc-apple-darwin8
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with: { version: 0.17.0 }
-      - run: sudo apt-get update && sudo apt-get install -y nasm nsis p7zip-full
+      - run: sudo apt-get update && sudo apt-get install -y nasm nsis p7zip-full pkgconf
       - name: llvm-mingw (msvcrt)
         run: |
           curl -fsSL -o "$RUNNER_TEMP/lm.tar.xz" \

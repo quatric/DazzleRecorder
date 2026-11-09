@@ -140,7 +140,7 @@ if [ "$X264" = 1 ]; then
     make -j"$JOBS" > make.log 2>&1 && make install-lib-static > install.log 2>&1) ||
     { tail -30 "$BLD/x264/configure.log" "$BLD/x264/config.log" "$BLD/x264/make.log" 2>/dev/null; exit 1; }
   FEATURES="$FEATURES --enable-gpl --enable-libx264 --enable-encoder=libx264
-    --extra-cflags=-I$XP/include --extra-ldflags=-L$XP/lib --pkg-config-flags=--static"
+    --extra-cflags=-I$XP/include --extra-ldflags=-L$XP/lib --pkg-config=pkg-config --pkg-config-flags=--static"
   export PKG_CONFIG_PATH=$XP/lib/pkgconfig PKG_CONFIG_LIBDIR=$XP/lib/pkgconfig
 fi
 
