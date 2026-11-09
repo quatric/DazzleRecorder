@@ -62,6 +62,10 @@ struct recorder {
 
     uint64_t audio_samples; /* written to ffmpeg */
     uint64_t video_frames;  /* written to ffmpeg, including repeats */
+    /* What the device delivered. A/V sync is judged on these, not on what ffmpeg has taken: ffmpeg
+     * holds one input back while the other's encoder fills up (x264 keeps a second or more of frames
+     * in flight on a many-core CPU), and that buffering is not clock drift. */
+    uint64_t audio_in, video_in;
     uint64_t dropped, repeated;
     int failed;
 
@@ -428,9 +432,9 @@ static void *video_writer(void *arg)
         /* The other way round from the repeats below: when the video clock runs faster than the audio
          * clock (Line In, or a Dazzle whose sound comes through the OS), drop a frame once the video is
          * three frames ahead, so long recordings stay in sync. Not in the first seconds, while the
-         * audio pipe gets going. */
-        double ahead = (r->video_frames + r->vcount + 1) / fps - (double)r->audio_samples / r->o.audio_rate;
-        if (have_frame && r->audio_samples > (uint64_t)r->o.audio_rate * 2 && ahead > 3.0 / fps) {
+         * audio gets going. Both sides are counted as delivered by the device (see audio_in). */
+        double ahead = (double)(r->video_in + r->repeated - r->dropped) / fps - (double)r->audio_in / r->o.audio_rate;
+        if (have_frame && r->audio_in > (uint64_t)r->o.audio_rate * 2 && ahead > 3.0 / fps) {
             r->dropped++;
             pthread_mutex_unlock(&r->lock);
             continue;
@@ -447,9 +451,9 @@ static void *video_writer(void *arg)
         }
         have_frame = 1;
 
-        /* write once, plus repeats while the audio clock is ahead by > 1 frame. Frames still
-         * queued count as written: they cover time that has already passed, so repeating for
-         * it too (e.g. while ffmpeg starts up and reads audio first) would overshoot. */
+        /* write once, plus repeats while the audio clock is ahead by > 1 frame (frames lost on the
+         * way, or no signal). Delivered frames count, queued or not: they cover time that has
+         * already passed, so repeating for it too would overshoot. */
         int copies = 1;
         do {
             if (write_all(r, r->vfd, "FRAME\n", 6) || write_all(r, r->vfd, planar, r->frame_bytes)) {
@@ -460,8 +464,8 @@ static void *video_writer(void *arg)
             r->video_frames++;
             if (copies > 1)
                 r->repeated++;
-            double audio_t = (double)r->audio_samples / r->o.audio_rate;
-            double video_t = (r->video_frames + r->vcount) / fps;
+            double audio_t = (double)r->audio_in / r->o.audio_rate;
+            double video_t = (double)(r->video_in + r->repeated - r->dropped) / fps;
             pthread_mutex_unlock(&r->lock);
             if (audio_t - video_t < 1.5 / fps || copies > 30)
                 break;
@@ -658,6 +662,7 @@ void rec_video(recorder_t *r, const uint8_t *yuyv)
     pthread_mutex_lock(&r->lock);
     if (!r->closing) {
         r->started = 1;
+        r->video_in++;
         if (r->vcount == VQUEUE) {
             r->dropped++; /* the writer repeats a frame later to keep sync */
         } else {
@@ -679,6 +684,7 @@ void rec_audio(recorder_t *r, const int16_t *samples, int frames)
         for (size_t i = 0; i < bytes; i++)
             r->aring[(tail + i) % ARING] = p[i];
         r->acount += bytes;
+        r->audio_in += (uint64_t)frames;
         pthread_cond_broadcast(&r->cond);
     }
     pthread_mutex_unlock(&r->lock);
@@ -687,7 +693,7 @@ void rec_audio(recorder_t *r, const int16_t *samples, int frames)
 double rec_seconds(recorder_t *r)
 {
     pthread_mutex_lock(&r->lock);
-    double s = (double)r->audio_samples / r->o.audio_rate;
+    double s = (double)r->audio_in / r->o.audio_rate;
     pthread_mutex_unlock(&r->lock);
     return s;
 }
