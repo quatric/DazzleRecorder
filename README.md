@@ -104,6 +104,8 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
 * **Save to**: recording folder (default: your Movies or Videos folder)
 * **Record / Stop** (⌘R on macOS): writes `DazzleRecorder <date>.mpg`, a DVD-compatible
   MPEG-2 program stream with a 4:3 display aspect (16:9 with Widescreen)
+* **Audio** source (macOS) / **Line In (not Dazzle)** (Windows) / **Audio: Line In** (Linux): record and monitor the computer's Line In
+  instead of the Dazzle's own audio, bypassing it (also `--line-in` on macOS)
 * L/R audio meters, **Play audio** to monitor through the speakers, ⌘S saves a PNG snapshot
 
 Audio is the master clock while recording. If video frames go missing (signal loss,

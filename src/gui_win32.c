@@ -21,7 +21,7 @@
 #include "app_core.h"
 
 enum {
-    ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_TIME, ID_STATUS, ID_METER_L,
+    ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_LINEIN, ID_TIME, ID_STATUS, ID_METER_L,
     ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R,
     IDM_RECORD = 200, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
     TIMER_FRAME = 1, TIMER_UI = 2,
@@ -31,7 +31,7 @@ enum {
 static struct {
     HINSTANCE inst;
     HWND wnd, preview;
-    HWND input, deint, wide, quality, folder_btn, record, monitor, time, status, meter[2];
+    HWND input, deint, wide, quality, folder_btn, record, monitor, linein, time, status, meter[2];
     HWND labels[5];
     HFONT font, time_font, badge_font;
     HBRUSH bar_brush;
@@ -224,6 +224,8 @@ static void layout(void)
     x += S(14 + 100 + 16);
     MoveWindow(G.monitor, x, y2 + S(4), S(100), lh, TRUE);
     x += S(100 + 12);
+    MoveWindow(G.linein, x, y2 + S(4), S(130), lh, TRUE);
+    x += S(130 + 12);
     MoveWindow(G.status, x, y2 + S(6), c.right - x - S(12), lh, TRUE);
     (void)ch;
 }
@@ -262,6 +264,7 @@ static void build_controls(void)
     G.labels[4] = make(L"STATIC", L"R", 0, ID_LBL_R);
     G.meter[1] = make(L"STATIC", L"", SS_OWNERDRAW, ID_METER_R);
     G.monitor = make(L"BUTTON", L"Play audio", BS_AUTOCHECKBOX | WS_TABSTOP, ID_MONITOR);
+    G.linein = make(L"BUTTON", L"Line In (not Dazzle)", BS_AUTOCHECKBOX | WS_TABSTOP, ID_LINEIN);
     G.status = make(L"STATIC", L"", SS_ENDELLIPSIS | SS_NOPREFIX, ID_STATUS);
 }
 
@@ -342,6 +345,7 @@ static void set_recording_ui(int recording)
     SetWindowTextW(G.record, recording ? L"\x25A0  Stop" : L"\x25CF  Record");
     EnableWindow(G.deint, !recording);
     EnableWindow(G.wide, !recording);
+    EnableWindow(G.linein, !recording);
     EnableWindow(G.quality, !recording);
     EnableWindow(G.folder_btn, !recording);
     ModifyMenuW(G.menu, IDM_RECORD, MF_BYCOMMAND | MF_STRING, IDM_RECORD,
@@ -398,7 +402,7 @@ static void snapshot(void)
 static void toggle_fullscreen(void)
 {
     DWORD style = (DWORD)GetWindowLongW(G.wnd, GWL_STYLE);
-    HWND bar[] = { G.input, G.deint, G.wide, G.quality, G.folder_btn, G.record, G.monitor, G.time, G.status,
+    HWND bar[] = { G.input, G.deint, G.wide, G.quality, G.folder_btn, G.record, G.monitor, G.linein, G.time, G.status,
                    G.meter[0], G.meter[1], G.labels[0], G.labels[1], G.labels[2], G.labels[3], G.labels[4] };
     G.fullscreen = !G.fullscreen;
     for (size_t i = 0; i < sizeof(bar) / sizeof(bar[0]); i++)
@@ -504,6 +508,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             int on = SendMessageW(G.monitor, BM_GETCHECK, 0, 0) == BST_CHECKED;
             app_set_monitor(G.app, on);
             app_set_setting_int("monitor", on);
+            return 0;
+        }
+        case ID_LINEIN: {
+            int on = SendMessageW(G.linein, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            app_set_audio_source(G.app, on); /* also saves the setting */
+            set_status(app_audio_problem(G.app));
             return 0;
         }
         case ID_FOLDER:
@@ -684,6 +694,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     app_set_widescreen(G.app, wide);
     app_set_deinterlace(G.app, deint);
     app_set_monitor(G.app, monitor);
+    int line_in = app_setting_int("line_in", 0);
+    SendMessageW(G.linein, BM_SETCHECK, line_in ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (line_in)
+        app_set_audio_source(G.app, 1);
     update_folder_button();
     update_title();
     set_status(app_audio_problem(G.app));

@@ -116,6 +116,43 @@ static IMMDevice *find_endpoint(IMMDeviceEnumerator *en, uint16_t vid, uint16_t 
     return found;
 }
 
+/* The computer's Line In: a capture endpoint named "Line In", else the default one (not the box). */
+static IMMDevice *find_line_endpoint(IMMDeviceEnumerator *en)
+{
+    IMMDeviceCollection *coll = NULL;
+    IMMDevice *found = NULL;
+    if (SUCCEEDED(IMMDeviceEnumerator_EnumAudioEndpoints(en, eCapture, DEVICE_STATE_ACTIVE, &coll))) {
+        UINT count = 0;
+        IMMDeviceCollection_GetCount(coll, &count);
+        for (UINT i = 0; i < count && !found; i++) {
+            IMMDevice *dev = NULL;
+            IPropertyStore *ps = NULL;
+            if (FAILED(IMMDeviceCollection_Item(coll, i, &dev)))
+                continue;
+            int hit = 0;
+            if (SUCCEEDED(IMMDevice_OpenPropertyStore(dev, STGM_READ, &ps))) {
+                PROPVARIANT pv;
+                PropVariantInit(&pv);
+                if (SUCCEEDED(IPropertyStore_GetValue(ps, &k_PKEY_Device_FriendlyName, &pv)) && pv.vt == VT_LPWSTR) {
+                    char buf[512];
+                    to_utf8(pv.pwszVal, buf, sizeof(buf));
+                    hit = sa_line_name_matches(buf);
+                }
+                PropVariantClear(&pv);
+                IPropertyStore_Release(ps);
+            }
+            if (hit)
+                found = dev;
+            else
+                IMMDevice_Release(dev);
+        }
+        IMMDeviceCollection_Release(coll);
+    }
+    if (!found)
+        IMMDeviceEnumerator_GetDefaultAudioEndpoint(en, eCapture, eConsole, &found);
+    return found;
+}
+
 struct sa_input {
     uint16_t vid, pid;
     char product[128];
@@ -215,8 +252,11 @@ static void *capture_thread(void *arg)
     in->rate = 48000;
     HRESULT hr = CoCreateInstance(&k_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &k_IID_IMMDeviceEnumerator,
                                   (void **)&en);
-    if (SUCCEEDED(hr) && !(dev = find_endpoint(en, in->vid, in->pid, in->product))) {
-        sa_set_error("Windows has no sound input for the Dazzle (check Sound settings > Recording)");
+    int line = sa_line_in();
+    if (SUCCEEDED(hr) &&
+        !(dev = line ? find_line_endpoint(en) : find_endpoint(en, in->vid, in->pid, in->product))) {
+        sa_set_error(line ? "Windows has no Line In sound input (check Sound settings > Recording)"
+                          : "Windows has no sound input for the Dazzle (check Sound settings > Recording)");
         SetEvent(in->ready);
         goto out;
     }

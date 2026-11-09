@@ -41,6 +41,23 @@ static int contains_nocase(const char *hay, const char *needle)
     return 0;
 }
 
+static volatile int g_line_in;
+
+void sa_set_line_in(int on) { g_line_in = on ? 1 : 0; }
+int sa_line_in(void) { return g_line_in; }
+
+int sa_box_name(const char *name)
+{
+    return contains_nocase(name, "DAZZLE") || contains_nocase(name, "ROXIO");
+}
+
+int sa_line_name_matches(const char *name)
+{
+    if (contains_nocase(name, "DAZZLE") || contains_nocase(name, "ROXIO"))
+        return 0;
+    return contains_nocase(name, "LINE");
+}
+
 int sa_name_matches(const char *name, const char *product)
 {
     const char *env = getenv("DVC100_AUDIO_DEVICE");

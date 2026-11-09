@@ -29,6 +29,7 @@ void app_set_input(app_t *a, dvc100_input_t input);
 void app_set_deinterlace(app_t *a, int on); /* preview line blend; recording uses yadif */
 void app_set_widescreen(app_t *a, int on);  /* 16:9 instead of 4:3 for recordings and snapshots */
 void app_set_monitor(app_t *a, int on);     /* play the input through the speakers */
+void app_set_audio_source(app_t *a, int line_in); /* 0 = the capture box, 1 = the computer's Line In */
 const char *app_audio_problem(app_t *a);    /* NULL when audio works */
 
 /* Copies the latest preview frame as 32-bit pixels 0x00RRGGBB (BGRX bytes on

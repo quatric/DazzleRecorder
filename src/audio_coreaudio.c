@@ -96,6 +96,82 @@ static AudioObjectID find_device(uint16_t vid, uint16_t pid, const char *product
     return found;
 }
 
+/* The computer's Line In: an input named "Line In", then a built-in input with a Line In data
+ * source (selected here), then the default input unless that is the capture box. */
+static AudioObjectID find_line_in(void)
+{
+    AudioObjectPropertyAddress a = { kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal,
+                                     kAudioObjectPropertyElementMain };
+    UInt32 sz = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &a, 0, NULL, &sz))
+        return kAudioObjectUnknown;
+    AudioObjectID *ids = malloc(sz);
+    if (!ids || AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, NULL, &sz, ids)) {
+        free(ids);
+        return kAudioObjectUnknown;
+    }
+    UInt32 n = sz / sizeof(*ids);
+    AudioObjectID found = kAudioObjectUnknown, fallback = kAudioObjectUnknown;
+    for (UInt32 i = 0; i < n && found == kAudioObjectUnknown; i++) {
+        if (input_channels(ids[i]) == 0)
+            continue;
+        CFStringRef s = dev_string(ids[i], kAudioObjectPropertyName);
+        char name[256] = "";
+        if (s) {
+            CFStringGetCString(s, name, sizeof(name), kCFStringEncodingUTF8);
+            CFRelease(s);
+        }
+        if (sa_line_name_matches(name)) {
+            found = ids[i];
+            break;
+        }
+        if (sa_box_name(name))
+            continue; /* the capture box */
+        /* a built-in style input that offers a "Line In" data source */
+        AudioObjectPropertyAddress ds = { kAudioDevicePropertyDataSources, kAudioObjectPropertyScopeInput,
+                                          kAudioObjectPropertyElementMain };
+        UInt32 dsz = 0;
+        if (!AudioObjectGetPropertyDataSize(ids[i], &ds, 0, NULL, &dsz) && dsz) {
+            UInt32 *srcs = malloc(dsz);
+            if (srcs && !AudioObjectGetPropertyData(ids[i], &ds, 0, NULL, &dsz, srcs)) {
+                for (UInt32 k = 0; k < dsz / sizeof(UInt32); k++) {
+                    if (srcs[k] == 'line') {
+                        AudioObjectPropertyAddress cur = { kAudioDevicePropertyDataSource,
+                                                           kAudioObjectPropertyScopeInput,
+                                                           kAudioObjectPropertyElementMain };
+                        UInt32 v = srcs[k];
+                        AudioObjectSetPropertyData(ids[i], &cur, 0, NULL, sizeof(v), &v);
+                        found = ids[i];
+                        break;
+                    }
+                }
+            }
+            free(srcs);
+        }
+        if (fallback == kAudioObjectUnknown)
+            fallback = ids[i];
+    }
+    free(ids);
+    if (found != kAudioObjectUnknown)
+        return found;
+    AudioObjectPropertyAddress d = { kAudioHardwarePropertyDefaultInputDevice, kAudioObjectPropertyScopeGlobal,
+                                     kAudioObjectPropertyElementMain };
+    AudioObjectID def = kAudioObjectUnknown;
+    UInt32 dsz = sizeof(def);
+    if (!AudioObjectGetPropertyData(kAudioObjectSystemObject, &d, 0, NULL, &dsz, &def) && def != kAudioObjectUnknown &&
+        input_channels(def) > 0) {
+        CFStringRef s = dev_string(def, kAudioObjectPropertyName);
+        char name[256] = "";
+        if (s) {
+            CFStringGetCString(s, name, sizeof(name), kCFStringEncodingUTF8);
+            CFRelease(s);
+        }
+        if (!sa_box_name(name))
+            return def;
+    }
+    return fallback;
+}
+
 static void input_cb(void *user, AudioQueueRef q, AudioQueueBufferRef b, const AudioTimeStamp *ts,
                      UInt32 npackets, const AudioStreamPacketDescription *desc)
 {
@@ -112,9 +188,11 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
                            int *rate)
 {
     sa_set_error(NULL);
-    AudioObjectID id = find_device(vid, pid, product);
+    int line = sa_line_in();
+    AudioObjectID id = line ? find_line_in() : find_device(vid, pid, product);
     if (id == kAudioObjectUnknown) {
-        sa_set_error("macOS shows no sound input for the Dazzle (check System Settings > Sound > Input)");
+        sa_set_error(line ? "macOS shows no Line In sound input (check System Settings > Sound > Input)"
+                          : "macOS shows no sound input for the Dazzle (check System Settings > Sound > Input)");
         return NULL;
     }
 

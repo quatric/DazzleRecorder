@@ -1684,6 +1684,9 @@ int dvc100_audio_start(dvc100_t *dev, dvc100_audio_cb cb, void *user, int *rate)
     int alt, psize, fr, r;
     if (dev->audio.running || dev->sys_audio)
         return 0;
+    /* Line In selected: never touch the box's own audio interface */
+    if (sa_line_in())
+        return start_system_audio(dev, cb, user, rate);
 #ifdef __linux__
     /* Linux claims the interface by unbinding snd-usb-audio; use the ALSA card
      * while it exists, so the sound server keeps seeing the device. */

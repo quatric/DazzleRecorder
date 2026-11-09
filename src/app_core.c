@@ -193,6 +193,36 @@ void app_peaks(app_t *a, double db[2])
 void app_set_monitor(app_t *a, int on) { a->monitor = on; }
 const char *app_audio_problem(app_t *a) { return a->audio_problem[0] ? a->audio_problem : NULL; }
 
+/* (Re)starts the audio input from the box or, if selected, the computer's Line In. */
+static void start_audio(app_t *a)
+{
+    int r;
+    a->audio_problem[0] = 0;
+    if ((r = dvc100_audio_start(a->dev, audio_cb, a, &a->audio_rate)) == 0) {
+        a->audio_ok = 1;
+        a->ring_r = a->ring_w;
+        if (!a->out) {
+            a->out = sa_output_start(a->audio_rate, output_cb, a);
+            if (!a->out)
+                snprintf(a->audio_problem, sizeof(a->audio_problem), "No audio output device for monitoring");
+        }
+    } else {
+        const char *why = sa_last_error();
+        snprintf(a->audio_problem, sizeof(a->audio_problem), "Audio unavailable: %s", why ? why : dvc100_strerror(r));
+    }
+}
+
+void app_set_audio_source(app_t *a, int line_in)
+{
+    pthread_mutex_lock(&a->rec_lock);
+    a->audio_ok = 0; /* recordings get silence while the input is switched */
+    pthread_mutex_unlock(&a->rec_lock);
+    dvc100_audio_stop(a->dev);
+    sa_set_line_in(line_in);
+    app_set_setting_int("line_in", line_in ? 1 : 0);
+    start_audio(a);
+}
+
 /* ---- device ---- */
 
 static int g_last_error;
@@ -243,16 +273,8 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
         app_close(a);
         return NULL;
     }
-    if ((r = dvc100_audio_start(dev, audio_cb, a, &a->audio_rate)) == 0) {
-        a->audio_ok = 1;
-        a->ring_r = a->ring_w;
-        a->out = sa_output_start(a->audio_rate, output_cb, a);
-        if (!a->out)
-            snprintf(a->audio_problem, sizeof(a->audio_problem), "No audio output device for monitoring");
-    } else {
-        const char *why = sa_last_error();
-        snprintf(a->audio_problem, sizeof(a->audio_problem), "Audio unavailable: %s", why ? why : dvc100_strerror(r));
-    }
+    sa_set_line_in(app_setting_int("line_in", 0));
+    start_audio(a);
     return a;
 }
 

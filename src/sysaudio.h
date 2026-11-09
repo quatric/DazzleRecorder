@@ -24,6 +24,16 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
 void sa_input_stop(sa_input_t *in);
 const char *sa_backend_name(void);
 
+/* Audio source: 0 = the capture box (the default), 1 = the computer's Line In,
+ * which bypasses the box's own audio. While on, sa_input_start() opens the
+ * Line In (an input named "Line In", else the default input) instead. */
+void sa_set_line_in(int on);
+int sa_line_in(void);
+/* Name of the Dazzle/Roxio capture box itself (ignores DVC100_AUDIO_DEVICE). */
+int sa_box_name(const char *name);
+/* Name test for "Line In" inputs; never matches the capture box itself. */
+int sa_line_name_matches(const char *name);
+
 /* Why the last sa_input_start() failed, in words for the user; NULL if it did not say. */
 const char *sa_last_error(void);
 void sa_set_error(const char *fmt, ...);

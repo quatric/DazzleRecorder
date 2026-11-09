@@ -119,11 +119,15 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
 {
     if (!alsa_load())
         return NULL;
-    int card = find_card(vid, pid, product);
-    if (card < 0)
-        return NULL;
     char name[32];
-    snprintf(name, sizeof(name), "plughw:%d,0", card);
+    if (sa_line_in()) {
+        snprintf(name, sizeof(name), "default"); /* the sound server's chosen input, not the box */
+    } else {
+        int card = find_card(vid, pid, product);
+        if (card < 0)
+            return NULL;
+        snprintf(name, sizeof(name), "plughw:%d,0", card);
+    }
     sa_input_t *in = calloc(1, sizeof(*in));
     if (!in)
         return NULL;

@@ -355,7 +355,7 @@ static volatile int g_peak[2];
     NSDate *_recStart;
     int _recDeinterlaced;
 
-    NSPopUpButton *_inputPopup, *_qualityPopup;
+    NSPopUpButton *_inputPopup, *_qualityPopup, *_audioPopup;
     NSButton *_deintCheck, *_wideCheck, *_monitorCheck, *_recordButton, *_folderButton;
     Box *_bar;
     NSTextField *_timeLabel, *_statusLabel;
@@ -479,7 +479,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _lastLock = [NSLock new];
     pthread_mutex_init(&_recLock, NULL);
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
-    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES }];
+    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0 }];
     NSString *folder = [ud stringForKey:@"folder"];
     _folder = folder ? [NSURL fileURLWithPath:folder]
                      : [NSFileManager.defaultManager URLsForDirectory:NSMoviesDirectory
@@ -495,6 +495,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         if ([a isEqualToString:@"--ntsc"]) norm = DVC100_NORM_NTSC;
         if ([a isEqualToString:@"-v"]) dvc100_set_verbose(1);
     }
+
+    sa_set_line_in((int)[ud integerForKey:@"audioSource"] == 1);
+    for (NSString *a in NSProcessInfo.processInfo.arguments)
+        if ([a isEqualToString:@"--line-in"]) sa_set_line_in(1);
 
     [self buildMenu];
     int r = dvc100_open(&_dev, 0, 0);
@@ -634,7 +638,16 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _statusLabel.textColor = label_color(YES);
     [_statusLabel.cell setLineBreakMode:NSLineBreakByTruncatingMiddle];
 
-    Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
+    _audioPopup = [NSPopUpButton new];
+    [_audioPopup addItemsWithTitles:@[ @"Dazzle", @"Line In" ]];
+    [_audioPopup selectItemAtIndex:sa_line_in() ? 1 : 0];
+    _audioPopup.target = self;
+    _audioPopup.action = @selector(audioSourceChanged:);
+    _audioPopup.toolTip = @"Record and play the sound from the Dazzle, or from this computer's Line In instead "
+                          @"(the Dazzle's own audio is then bypassed).";
+
+    Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, [self label:@"Audio"], _audioPopup,
+                         _statusLabel ]);
     row2.flexible = _statusLabel;
     row2.spacing = 16;
 
@@ -757,6 +770,19 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [NSUserDefaults.standardUserDefaults setInteger:_qualityPopup.indexOfSelectedItem forKey:@"quality"];
 }
 
+- (void)audioSourceChanged:(id)sender
+{
+    int line = _audioPopup.indexOfSelectedItem == 1;
+    pthread_mutex_lock(&_recLock);
+    _audioOK = 0; /* recordings get silence while the input is switched */
+    pthread_mutex_unlock(&_recLock);
+    dvc100_audio_stop(_dev);
+    sa_set_line_in(line);
+    [NSUserDefaults.standardUserDefaults setInteger:line forKey:@"audioSource"];
+    [self setStatus:@""];
+    [self requestMicrophoneThen:^{ [self startAudio]; }];
+}
+
 - (void)monitorChanged:(id)sender
 {
     BOOL on = _monitorCheck.state == NSControlStateValueOn;
@@ -843,7 +869,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
     [_bar refit];
     set_symbol(_recordButton, @"stop.circle.fill", nil);
-    _deintCheck.enabled = _wideCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = NO;
+    _deintCheck.enabled = _wideCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = _audioPopup.enabled = NO;
     _preview.badge.hidden = NO;
     [self setStatus:[NSString stringWithFormat:@"Recording %@ MPEG-2 to %@",
                                                o.deinterlace ? @"deinterlaced" : @"interlaced", name]];
@@ -870,7 +896,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
             self->_recordButton.title = @"Record";
             [self->_bar refit];
             set_symbol(self->_recordButton, @"record.circle", nil);
-            self->_deintCheck.enabled = self->_wideCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = YES;
+            self->_deintCheck.enabled = self->_wideCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = self->_audioPopup.enabled = YES;
             self->_preview.badge.hidden = YES;
             if (r == 0) {
                 [self setStatus:[@"Saved " stringByAppendingString:path.lastPathComponent]];
@@ -1039,6 +1065,8 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
     pthread_mutex_unlock(&_recLock);
     g_monitor = _monitorCheck.state == NSControlStateValueOn;
     g_ring_r = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE);
+    if (_engine || _outputUnit)
+        return; /* switching the source: the monitor output is already running */
     if (@available(macOS 10.15, *)) {
         _engine = [AVAudioEngine new];
         AVAudioFormat *fmt = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:g_audio_rate channels:2];

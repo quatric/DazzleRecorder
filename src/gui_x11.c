@@ -111,7 +111,7 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_MONITOR, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_MONITOR, B_AUDIO, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -131,7 +131,7 @@ static struct {
     int sw, sh;
     void *img;
     int dirty_picture, dirty_bar;
-    int svideo, deint, wide, monitor, quality;
+    int svideo, deint, wide, monitor, line_in, quality;
     char folder[1024];
     char status[600];
     double level[2];
@@ -309,6 +309,13 @@ static void press(int b)
         app_set_monitor(G.app, G.monitor);
         app_set_setting_int("monitor", G.monitor);
         break;
+    case B_AUDIO:
+        if (rec)
+            break;
+        G.line_in = !G.line_in;
+        app_set_audio_source(G.app, G.line_in); /* also saves the setting */
+        set_status(app_audio_problem(G.app));
+        break;
     case B_QUALITY:
         if (rec)
             break;
@@ -444,6 +451,8 @@ static void draw_bar(void)
     x += 90;
     button(d, B_MONITOR, x, 6, 76, G.monitor ? "Monitor" : "Muted", G.monitor, 1);
     x += 82;
+    button(d, B_AUDIO, x, 6, 116, G.line_in ? "Audio: Line In" : "Audio: Dazzle", G.line_in, !rec);
+    x += 122;
     button(d, B_QUALITY, x, 6, 84, QUALITY_NAME[G.quality], 0, !rec);
     x += 90;
     button(d, B_FOLDER, x, 6, 70, "Folder...", 0, !rec);
@@ -579,6 +588,9 @@ int main(int argc, char **argv)
     app_set_deinterlace(G.app, G.deint);
     app_set_widescreen(G.app, G.wide);
     app_set_monitor(G.app, G.monitor);
+    G.line_in = app_setting_int("line_in", 0);
+    if (G.line_in)
+        app_set_audio_source(G.app, 1);
     set_status(app_audio_problem(G.app));
 
     G.scr = p_XDefaultScreen(G.dpy);
