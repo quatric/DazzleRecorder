@@ -1,7 +1,8 @@
 /*
- * MPEG-2 recorder: YUV4MPEG2 video on the child's stdin, raw s16le audio on
- * a second pipe (fd 3 on POSIX, a named pipe on Windows), encoded by ffmpeg
- * to MPEG-2 video + MPEG-1 Layer II audio in a DVD program stream. Audio is
+ * Recorder: YUV4MPEG2 video on the child's stdin, raw 16-bit audio on a
+ * second pipe (fd 3 on POSIX, a named pipe on Windows), encoded by ffmpeg
+ * to MPEG-2 video + MPEG-1 Layer II audio in a DVD program stream (the
+ * default), H.264 + AAC in MP4, or DV + PCM in QuickTime. Audio is
  * the master clock: if the video falls behind (dropped frames, loss of
  * signal) the last frame is repeated so the two streams stay in sync for
  * the whole recording.
@@ -21,7 +22,9 @@ typedef HANDLE pipe_t;
 #else
 #include <fcntl.h>
 #include <signal.h>
+#ifndef LEGACY_MAC
 #include <spawn.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -329,6 +332,24 @@ static int spawn_ffmpeg(recorder_t *r, const char *ffmpeg, const char **argv, ch
     fcntl(vp[1], F_SETFD, FD_CLOEXEC);
     fcntl(ap[1], F_SETFD, FD_CLOEXEC);
 
+#ifdef LEGACY_MAC
+    /* Mac OS X 10.3/10.4 have no posix_spawn (10.5) */
+    int rc = 0;
+    pid_t pid = fork();
+    if (pid == 0) {
+        int nul = open("/dev/null", O_WRONLY);
+        dup2(vp[0], 0);
+        dup2(ap[0], 3);
+        if (nul >= 0)
+            dup2(nul, 1);
+        execv(ffmpeg, (char *const *)argv);
+        _exit(127);
+    }
+    if (pid < 0)
+        rc = errno;
+    else
+        r->pid = pid;
+#else
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, vp[0], 0);
@@ -336,6 +357,7 @@ static int spawn_ffmpeg(recorder_t *r, const char *ffmpeg, const char **argv, ch
     posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
     int rc = posix_spawn(&r->pid, ffmpeg, &fa, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&fa);
+#endif
     close(vp[0]);
     close(ap[0]);
     if (rc) {
@@ -403,6 +425,16 @@ static void *video_writer(void *arg)
         memcpy(frame, r->vq[r->vhead], r->frame_bytes);
         r->vhead = (r->vhead + 1) % VQUEUE;
         r->vcount--;
+        /* The other way round from the repeats below: when the video clock runs faster than the audio
+         * clock (Line In, or a Dazzle whose sound comes through the OS), drop a frame once the video is
+         * three frames ahead, so long recordings stay in sync. Not in the first seconds, while the
+         * audio pipe gets going. */
+        double ahead = (r->video_frames + r->vcount + 1) / fps - (double)r->audio_samples / r->o.audio_rate;
+        if (have_frame && r->audio_samples > (uint64_t)r->o.audio_rate * 2 && ahead > 3.0 / fps) {
+            r->dropped++;
+            pthread_mutex_unlock(&r->lock);
+            continue;
+        }
         pthread_mutex_unlock(&r->lock);
 
         /* YUYV -> planar 4:2:2 */
@@ -479,6 +511,11 @@ static void *audio_writer(void *arg)
     return NULL;
 }
 
+const char *rec_extension(rec_codec_t codec)
+{
+    return codec == REC_H264 ? "mp4" : codec == REC_DV ? "mov" : "mpg";
+}
+
 recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, int errlen)
 {
     const char *ffmpeg = rec_find_ffmpeg();
@@ -514,26 +551,79 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     snprintf(rate, sizeof(rate), "%d", r->o.audio_rate);
     snprintf(gop, sizeof(gop), "%d", r->o.pal ? 15 : 18);
 
-    const char *argv[64];
+    char crf[16], keyint[16];
+    snprintf(crf, sizeof(crf), "%d", r->o.crf > 0 ? r->o.crf : 20);
+    snprintf(keyint, sizeof(keyint), "%d", r->o.pal ? 50 : 60);
+    const char *aspect = r->o.widescreen ? "16:9" : "4:3";
+
+    const char *argv[80];
     int n = 0;
 #define A(x) argv[n++] = (x)
     A(ffmpeg); A("-hide_banner"); A("-loglevel"); A("error"); A("-nostdin"); A("-y");
-    A("-thread_queue_size"); A("64");
+    /* Both inputs say exactly what they hold, so ffmpeg must not probe them: probing the raw audio reads
+     * seconds of it before ffmpeg looks at the video, and meanwhile the video queue overflows, which froze
+     * and then stuttered the first seconds of every recording. */
+    A("-thread_queue_size"); A("64"); A("-probesize"); A("32"); A("-analyzeduration"); A("0");
     A("-f"); A("yuv4mpegpipe"); A("-i"); A("pipe:0");
-    A("-thread_queue_size"); A("1024");
-    A("-f"); A("s16le"); A("-ar"); A(rate); A("-ac"); A("2"); A("-i"); A(audio_in);
+    A("-thread_queue_size"); A("1024"); A("-probesize"); A("32"); A("-analyzeduration"); A("0");
+    /* samples are in the CPU's own byte order (PowerPC is big-endian) */
+#if defined(__BIG_ENDIAN__) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+    A("-f"); A("s16be");
+#else
+    A("-f"); A("s16le");
+#endif
+    A("-ar"); A(rate); A("-ac"); A("2"); A("-i"); A(audio_in);
     A("-map"); A("0:v"); A("-map"); A("1:a");
-    if (r->o.deinterlace) {
-        A("-vf"); A("yadif=mode=send_frame:parity=tff,format=yuv420p");
-    } else {
-        /* field-aware 4:2:2 -> 4:2:0 so chroma doesn't mix the two fields */
-        A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
-        A("-flags"); A("+ilme+ildct"); A("-alternate_scan"); A("1");
+    switch (r->o.codec) {
+    case REC_H264:
+        if (r->o.deinterlace) {
+            A("-vf"); A("yadif=mode=send_frame:parity=tff,format=yuv420p");
+        } else {
+            /* interlaced H.264 (MBAFF, top field first), as broadcast and camcorders do it */
+            A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
+            A("-flags"); A("+ilme+ildct");
+        }
+        A("-c:v"); A("libx264"); A("-preset"); A("veryfast"); A("-crf"); A(crf);
+        A("-g"); A(keyint); A("-aspect"); A(aspect);
+        A("-c:a"); A("aac"); A("-b:a"); A("192k");
+        /* fragmented, so a recording cut short (crash, full disk, unplugged) still plays */
+        A("-movflags"); A("+frag_keyframe+empty_moov+default_base_moof");
+        A("-f"); A("mp4"); A(path);
+        break;
+    case REC_DV:
+        if (r->o.deinterlace) {
+            A("-vf"); A(r->o.pal ? "yadif=mode=send_frame:parity=tff,format=yuv420p"
+                                 : "yadif=mode=send_frame:parity=tff,format=yuv411p");
+        } else {
+            /* DV is bottom field first: move the picture down a line rather than swap the fields */
+            A("-vf"); A(r->o.pal ? "setfield=tff,fieldorder=bff,scale=interl=1,format=yuv420p"
+                                 : "setfield=tff,fieldorder=bff,format=yuv411p");
+            A("-flags"); A("+ilme+ildct");
+        }
+        A("-c:v"); A("dvvideo"); A("-aspect"); A(aspect);
+        A("-c:a"); A("pcm_s16be");
+        A("-f"); A("mov"); A(path);
+        break;
+    default:
+        if (r->o.deinterlace) {
+            A("-vf"); A("yadif=mode=send_frame:parity=tff,format=yuv420p");
+        } else {
+            /* field-aware 4:2:2 -> 4:2:0 so chroma doesn't mix the two fields */
+            A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
+            A("-flags"); A("+ilme+ildct"); A("-alternate_scan"); A("1");
+        }
+        A("-c:v"); A("mpeg2video"); A("-b:v"); A(vk); A("-maxrate"); A(maxk); A("-bufsize"); A("1835k");
+        A("-g"); A(gop); A("-aspect"); A(aspect);
+#ifdef __ppc__
+        /* a G4 cannot afford B-frames and the full motion search in real time */
+        A("-bf"); A("0"); A("-motion_est"); A("epzs"); A("-mbd"); A("simple");
+#else
+        A("-bf"); A("2");
+#endif
+        A("-c:a"); A("mp2"); A("-b:a"); A(ak);
+        A("-f"); A("dvd"); A(path);
+        break;
     }
-    A("-c:v"); A("mpeg2video"); A("-b:v"); A(vk); A("-maxrate"); A(maxk); A("-bufsize"); A("1835k");
-    A("-g"); A(gop); A("-bf"); A("2"); A("-aspect"); A(r->o.widescreen ? "16:9" : "4:3");
-    A("-c:a"); A("mp2"); A("-b:a"); A(ak);
-    A("-f"); A("dvd"); A(path);
     A(NULL);
 #undef A
 

@@ -111,12 +111,12 @@ static void write_y4m_frame(FILE *out, const uint8_t *yuyv, int w, int h, uint8_
 static void mpeg_frame(const dvc100_frame_t *f, void *user) { rec_video(user, f->data); }
 static void mpeg_audio(const int16_t *s, int frames, void *user) { rec_audio(user, s, frames); }
 
-static int record_mpeg2(dvc100_t *dev, const char *path, int w, int h, int pal, int deinterlace,
-                        int widescreen, int kbps, long count)
+static int record_encoded(dvc100_t *dev, rec_codec_t codec, const char *path, int w, int h, int pal, int deinterlace,
+                          int widescreen, int kbps, int crf, long count)
 {
     int rate = 48000;
-    recorder_opts_t o = { .width = w, .height = h, .pal = pal, .deinterlace = deinterlace, .widescreen = widescreen,
-                          .video_kbps = kbps, .audio_rate = rate };
+    recorder_opts_t o = { .codec = codec, .width = w, .height = h, .pal = pal, .deinterlace = deinterlace,
+                          .widescreen = widescreen, .video_kbps = kbps, .crf = crf, .audio_rate = rate };
     char err[256];
     recorder_t *rec = rec_open(path, &o, err, sizeof(err));
     if (!rec) {
@@ -133,8 +133,9 @@ static int record_mpeg2(dvc100_t *dev, const char *path, int w, int h, int pal, 
         dvc100_close(dev);
         return 1;
     }
-    fprintf(stderr, "dvc100-capture: recording %s MPEG-2 to %s, Ctrl-C to stop\n",
-            deinterlace ? "deinterlaced" : "interlaced", path);
+    fprintf(stderr, "dvc100-capture: recording %s %s to %s, Ctrl-C to stop\n",
+            deinterlace ? "deinterlaced" : "interlaced",
+            codec == REC_H264 ? "H.264" : codec == REC_DV ? "DV" : "MPEG-2", path);
     double limit = count > 0 ? count / (pal ? 25.0 : 30000.0 / 1001) : 0;
     while (!g_stop && (limit <= 0 || rec_seconds(rec) < limit))
         usleep(100000);
@@ -157,9 +158,12 @@ static void usage(const char *argv0)
             "  -o, --output FILE              output file, - for stdout (default -)\n"
             "  -c, --count N                  stop after N frames\n"
             "  -m, --mpeg2 FILE.mpg           record video+audio as DVD-compatible MPEG-2\n"
-            "  -d, --deinterlace              deinterlace the MPEG-2 recording (default: interlaced)\n"
-            "  -w, --widescreen               stretch the MPEG-2 recording to 16:9 (default: 4:3)\n"
+            "  -x, --h264 FILE.mp4            record video+audio as H.264 (x264) + AAC instead\n"
+            "      --dv FILE.mov              record video+audio as DV + PCM instead (light on old CPUs)\n"
+            "  -d, --deinterlace              deinterlace the recording (default: interlaced)\n"
+            "  -w, --widescreen               flag the recording 16:9 (default: 4:3)\n"
             "  -b, --bitrate KBPS             MPEG-2 video bitrate (default 8000)\n"
+            "  -q, --crf N                    H.264 constant quality, lower is better (default 20)\n"
             "  -a, --audio FILE.wav           also record the audio input (48 kHz stereo)\n"
             "      --audio-only               record audio only (with -a), until Ctrl-C or -t\n"
             "  -t, --time SECONDS             stop after this many seconds\n"
@@ -176,12 +180,13 @@ int main(int argc, char **argv)
     int raw = 0, info_only = 0, verbose = 0;
     long count = -1;
     const char *outpath = "-", *audiopath = NULL;
-    int audio_only = 0, deinterlace = 0, widescreen = 0, kbps = 0;
+    int audio_only = 0, deinterlace = 0, widescreen = 0, kbps = 0, crf = 0;
     const char *mpegpath = NULL;
+    rec_codec_t codec = REC_MPEG2;
     double seconds = 0;
     int picture[4] = { -1, -1, -1, -1 };
 
-    enum { OPT_AUDIO_ONLY = 999, OPT_INFO = 1000, OPT_BRI, OPT_CON, OPT_SAT, OPT_HUE };
+    enum { OPT_AUDIO_ONLY = 999, OPT_INFO = 1000, OPT_BRI, OPT_CON, OPT_SAT, OPT_HUE, OPT_DV };
     static const struct option opts[] = {
         { "input", required_argument, NULL, 'i' },
         { "norm", required_argument, NULL, 'n' },
@@ -190,6 +195,9 @@ int main(int argc, char **argv)
         { "count", required_argument, NULL, 'c' },
         { "audio", required_argument, NULL, 'a' },
         { "mpeg2", required_argument, NULL, 'm' },
+        { "h264", required_argument, NULL, 'x' },
+        { "dv", required_argument, NULL, OPT_DV },
+        { "crf", required_argument, NULL, 'q' },
         { "deinterlace", no_argument, NULL, 'd' },
         { "widescreen", no_argument, NULL, 'w' },
         { "bitrate", required_argument, NULL, 'b' },
@@ -205,7 +213,7 @@ int main(int argc, char **argv)
         { 0 },
     };
     int c;
-    while ((c = getopt_long(argc, argv, "i:n:f:o:c:a:m:dwb:t:vh", opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "i:n:f:o:c:a:m:x:q:dwb:t:vh", opts, NULL)) != -1) {
         switch (c) {
         case 'i':
             if (!strcmp(optarg, "svideo") || !strcmp(optarg, "s-video"))
@@ -231,7 +239,10 @@ int main(int argc, char **argv)
         case 'o': outpath = optarg; break;
         case 'c': count = strtol(optarg, NULL, 10); break;
         case 'a': audiopath = optarg; break;
-        case 'm': mpegpath = optarg; break;
+        case 'm': mpegpath = optarg; codec = REC_MPEG2; break;
+        case 'x': mpegpath = optarg; codec = REC_H264; break;
+        case OPT_DV: mpegpath = optarg; codec = REC_DV; break;
+        case 'q': crf = atoi(optarg); break;
         case 'd': deinterlace = 1; break;
         case 'w': widescreen = 1; break;
         case 'b': kbps = atoi(optarg); break;
@@ -308,7 +319,7 @@ int main(int argc, char **argv)
     }
 
     if (mpegpath)
-        return record_mpeg2(dev, mpegpath, w, h, pal, deinterlace, widescreen, kbps, count);
+        return record_encoded(dev, codec, mpegpath, w, h, pal, deinterlace, widescreen, kbps, crf, count);
 
     wav_t wav = { .f = NULL };
     pthread_mutex_init(&wav.lock, NULL);

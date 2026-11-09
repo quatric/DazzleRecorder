@@ -20,7 +20,7 @@ SYSLIBS  = -framework IOKit -framework CoreFoundation -framework Security \
 BUILD   = build
 LIBUSB  = $(BUILD)/libusb-1.0.a
 APP     = $(BUILD)/DazzleRecorder.app
-# A small LGPL ffmpeg (scripts/build-ffmpeg.sh) goes into the app and next to the
+# A small ffmpeg with x264 (scripts/build-ffmpeg.sh) goes into the app and next to the
 # command line tool, so recording needs nothing installed. BUNDLE_FFMPEG=0 skips it.
 BUNDLE_FFMPEG ?= 1
 FFMPEG   = $(BUILD)/ffmpeg

@@ -1,7 +1,7 @@
 /*
  * DazzleRecorder engine shared by the Windows and Linux GUIs (the macOS app
  * does the same in Cocoa): device, preview frames, audio monitoring and
- * meters, MPEG-2 recording, snapshots and settings. Everything here is
+ * meters, MPEG-2 or H.264 recording, snapshots and settings. Everything here is
  * thread safe; the GUI polls it from a timer.
  */
 #ifndef DAZZLE_APP_CORE_H
@@ -36,12 +36,22 @@ const char *app_audio_problem(app_t *a);    /* NULL when audio works */
  * little-endian, which is both a Windows DIB and CAIRO_FORMAT_RGB24) into
  * buf (width*height*4) if it is newer than *seq. Returns 1 if copied. */
 int app_get_frame(app_t *a, uint32_t *buf, uint64_t *seq);
+/* The preview as YUYV (2 bytes a pixel, as the box sends it) instead of RGB, for a GUI that converts on
+ * the graphics card (the PowerPC Mac build). app_get_frame still works, converting on the way out. */
+void app_set_preview_yuyv(app_t *a, int on);
+int app_get_frame_yuyv(app_t *a, uint8_t *buf, uint64_t *seq); /* buf: width*height*2 */
 /* Peak levels since the last call, in dBFS (-60..0). */
 void app_peaks(app_t *a, double db[2]);
 
-/* quality: 0 = 6, 1 = 8, 2 = 9.5 Mbit/s. path receives the file name. */
+/* quality: 0 = 6, 1 = 8, 2 = 9.5 Mbit/s MPEG-2 (.mpg, the default); 3, 4, 5 = H.264 (x264, .mp4) at
+ * CRF 23, 20, 17. path receives the file name. */
+#define APP_QUALITIES 6
+extern const char *const app_quality_names[APP_QUALITIES];
 int app_record_start(app_t *a, const char *folder, int quality, int deinterlace, char *path, int pathlen,
                      char *err, int errlen);
+/* codec: a rec_codec_t (recorder.h); level 0..2 is its Standard/High/Maximum. */
+int app_record_start_codec(app_t *a, const char *folder, int codec, int level, int deinterlace, char *path,
+                           int pathlen, char *err, int errlen);
 /* Stops in the background; done(user, ok, path) runs on a worker thread. */
 typedef void (*app_done_cb)(void *user, int ok, const char *path);
 void app_record_stop(app_t *a, app_done_cb done, void *user);

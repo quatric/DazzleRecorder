@@ -205,7 +205,7 @@ static void layout(void)
     int x = S(12), lh = S(20), ch = S(24);
     struct { HWND h; int w, dy, hh; } row1[] = {
         { G.labels[0], 40, 3, 20 }, { G.input, 110, 0, 200 }, { G.deint, 100, 2, 20 }, { G.wide, 100, 2, 20 },
-        { G.labels[1], 52, 3, 20 }, { G.quality, 170, 0, 200 }, { G.labels[2], 56, 3, 20 },
+        { G.labels[1], 52, 3, 20 }, { G.quality, 210, 0, 200 }, { G.labels[2], 56, 3, 20 },
         { G.folder_btn, 220, -1, 26 },
     };
     for (size_t i = 0; i < sizeof(row1) / sizeof(row1[0]); i++) {
@@ -250,9 +250,11 @@ static void build_controls(void)
     G.wide = make(L"BUTTON", L"Widescreen", BS_AUTOCHECKBOX | WS_TABSTOP, ID_WIDE);
     G.labels[1] = make(L"STATIC", L"Quality", 0, ID_LBL_QUALITY);
     G.quality = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, ID_QUALITY);
-    SendMessageW(G.quality, CB_ADDSTRING, 0, (LPARAM)L"Standard (6 Mbit/s)");
-    SendMessageW(G.quality, CB_ADDSTRING, 0, (LPARAM)L"High (8 Mbit/s)");
-    SendMessageW(G.quality, CB_ADDSTRING, 0, (LPARAM)L"Maximum (9.5 Mbit/s)");
+    for (int i = 0; i < APP_QUALITIES; i++) {
+        wchar_t wq[64];
+        MultiByteToWideChar(CP_UTF8, 0, app_quality_names[i], -1, wq, 64);
+        SendMessageW(G.quality, CB_ADDSTRING, 0, (LPARAM)wq);
+    }
     G.labels[2] = make(L"STATIC", L"Save to", 0, ID_LBL_SAVE);
     G.folder_btn = make(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_FOLDER);
 
@@ -455,7 +457,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mm = (MINMAXINFO *)(void *)lp;
-        mm->ptMinTrackSize.x = S(900);
+        mm->ptMinTrackSize.x = S(980);
         mm->ptMinTrackSize.y = S(420);
         return 0;
     }

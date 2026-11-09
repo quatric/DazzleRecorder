@@ -1,15 +1,25 @@
 The ffmpeg program included with DazzleRecorder is FFmpeg 7.1.5
-(https://ffmpeg.org), licensed under the GNU Lesser General Public License
-version 2.1 or later (see FFmpeg-COPYING.LGPLv2.1.txt).
+(https://ffmpeg.org) with x264 (https://www.videolan.org/developers/x264.html,
+"stable" branch, commit b35605ace3ddf7c1a5d67a2eb553f034aef41d55) linked in
+for H.264 recording. Because of x264, this ffmpeg is licensed under the GNU
+General Public License version 2 or later (see COPYING.GPLv2.txt); FFmpeg on
+its own is also available under the GNU Lesser General Public License 2.1 or
+later (see FFmpeg-COPYING.LGPLv2.1.txt). The PowerPC build for Mac OS X 10.3
+has no x264 and is LGPL.
 
 It is an unmodified FFmpeg built with only the parts the recorder uses:
   configure --disable-everything --disable-autodetect --disable-network
-            --enable-protocol=file,pipe --enable-demuxer=yuv4mpegpipe,pcm_s16le
-            --enable-decoder=rawvideo,pcm_s16le --enable-encoder=mpeg2video,mp2
-            --enable-muxer=mpeg2dvd
-            --enable-filter=yadif,setfield,scale,format,null,anull,aformat,aresample
+            --enable-protocol=file,pipe
+            --enable-demuxer=yuv4mpegpipe,pcm_s16le,pcm_s16be
+            --enable-decoder=rawvideo,pcm_s16le,pcm_s16be
+            --enable-encoder=mpeg2video,mp2,aac,dvvideo,pcm_s16be,libx264
+            --enable-muxer=mpeg2dvd,mp4,mov
+            --enable-filter=yadif,setfield,fieldorder,scale,format,null,anull,
+                            aformat,aresample
+            --enable-gpl --enable-libx264
 The exact build script is scripts/build-ffmpeg.sh in the DazzleRecorder
-source. The FFmpeg source code is available at
-https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
-You may replace this ffmpeg with any other build: put it next to Dazzle
-Capture, or set DVC100_FFMPEG to its path.
+source. The source code is available at
+  https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+  https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264.tar.bz2
+You may replace this ffmpeg with any other build: put it next to
+DazzleRecorder, or set DVC100_FFMPEG to its path.

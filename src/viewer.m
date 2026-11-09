@@ -15,6 +15,7 @@
 #include <pthread.h>
 
 #include "dvc100.h"
+#include "monitor_ring.h"
 #include "recorder.h"
 #include "sysaudio.h"
 
@@ -158,16 +159,24 @@ static NSTextField *make_label(NSString *s)
     return l;
 }
 
+static char kCheckbox;
+
 static NSButton *make_button(NSString *title, id target, SEL action, BOOL checkbox)
 {
-    if (@available(macOS 10.12, *))
-        return checkbox ? [NSButton checkboxWithTitle:title target:target action:action]
-                        : [NSButton buttonWithTitle:title target:target action:action];
+    if (@available(macOS 10.12, *)) {
+        NSButton *b = checkbox ? [NSButton checkboxWithTitle:title target:target action:action]
+                               : [NSButton buttonWithTitle:title target:target action:action];
+        if (checkbox)
+            objc_setAssociatedObject(b, &kCheckbox, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return b;
+    }
     NSButton *b = [NSButton new];
+    b.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
     b.title = title;
     b.target = target;
     b.action = action;
     if (checkbox) {
+        objc_setAssociatedObject(b, &kCheckbox, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [b setButtonType:NSButtonTypeSwitch];
     } else {
         [b setButtonType:NSButtonTypeMomentaryPushIn];
@@ -217,6 +226,17 @@ static NSSize natural_size(NSView *v)
     /* a label's cell adds the few points of padding its intrinsic width leaves out */
     if ([v isKindOfClass:NSTextField.class])
         s.width = MAX(s.width, [[(NSTextField *)v cell] cellSize].width);
+    /* 10.9 to 10.11 measure checkbox and button titles a few points short, which cut off their last
+     * letter ("Widescree"): measure the title itself and add the box or bezel around it */
+    if ([v isKindOfClass:NSPopUpButton.class]) {
+        s.width = MAX(s.width, [[(NSPopUpButton *)v cell] cellSize].width);
+    } else if ([v isKindOfClass:NSButton.class]) {
+        NSButton *b = (NSButton *)v;
+        BOOL box = objc_getAssociatedObject(b, &kCheckbox) != nil;
+        CGFloat title = ceil([b.attributedTitle size].width);
+        CGFloat image = b.image && b.imagePosition != NSNoImage ? b.image.size.width + 4 : 0;
+        s.width = MAX(s.width, MAX([b.cell cellSize].width, title + image + (box ? 24 : 28)));
+    }
     if (s.width < 0)
         s.width = v.frame.size.width;
     if (s.height < 0)
@@ -399,8 +419,8 @@ static Box *stack(NSArray<NSView *> *views)
 /* ---- audio: ring buffer for monitoring, peak meters ---- */
 
 #define RING_FRAMES 32768 /* power of two, ~680 ms at 48 kHz */
-static int16_t g_ring[RING_FRAMES * 2];
-static volatile uint64_t g_ring_w, g_ring_r;
+static int16_t g_ring_frames[RING_FRAMES * 2];
+static monitor_ring_t g_ring = { g_ring_frames, RING_FRAMES, 0, 0, 0, 0 };
 static int g_audio_rate = 48000;
 static volatile int g_peak[2];
 
@@ -421,6 +441,8 @@ static volatile int g_peak[2];
     id _engine; /* AVAudioEngine, 10.15 and later only */
     CVPixelBufferRef _lastFrame;
     NSLock *_lastLock;
+    BOOL _timed;     /* the preview layer runs on a host-clock timebase: frames carry their display time */
+    double _nextPts; /* display time of the next frame, in host-clock seconds */
 
     pthread_mutex_t _recLock;
     AudioUnit _outputUnit; /* monitor output before 10.15 (no AVAudioSourceNode) */
@@ -429,7 +451,7 @@ static volatile int g_peak[2];
     NSDate *_recStart;
     int _recDeinterlaced;
 
-    NSPopUpButton *_inputPopup, *_qualityPopup, *_audioPopup;
+    NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup;
     NSButton *_deintCheck, *_wideCheck, *_monitorCheck, *_recordButton, *_folderButton;
     Box *_bar;
     NSTextField *_timeLabel, *_statusLabel;
@@ -446,18 +468,7 @@ static void frame_cb(const dvc100_frame_t *f, void *user)
 static void audio_cb(const int16_t *s, int frames, void *user)
 {
     AppDelegate *self = (__bridge AppDelegate *)user;
-    uint64_t w = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE);
-    int pl = 0, pr = 0;
-    for (int i = 0; i < frames; i++, w++) {
-        int16_t l = s[2 * i], r = s[2 * i + 1];
-        g_ring[(w % RING_FRAMES) * 2] = l;
-        g_ring[(w % RING_FRAMES) * 2 + 1] = r;
-        if (abs(l) > pl) pl = abs(l);
-        if (abs(r) > pr) pr = abs(r);
-    }
-    __atomic_store_n(&g_ring_w, w, __ATOMIC_RELEASE);
-    if (pl > g_peak[0]) g_peak[0] = pl;
-    if (pr > g_peak[1]) g_peak[1] = pr;
+    monitor_ring_write(&g_ring, s, frames, g_peak);
     [self recordAudio:s frames:frames];
 }
 
@@ -506,16 +517,27 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     }
     CVPixelBufferUnlockBaseAddress(pb, 0);
 
+    /* Frames come off USB in bursts (a transfer holds 8 ms of packets), so showing each one the moment it
+     * lands puts some on the wrong screen refresh and the picture judders. Instead each frame gets a display
+     * time a little ahead (two frames), smoothed over the last few arrivals so it moves by exactly one frame
+     * period, and the layer shows it on the refresh where it falls. */
+    const double period = _pal ? 1.0 / 25 : 1001.0 / 30000;
+    double now = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())), want = now + 2 * period;
+    double pts = _nextPts == 0 || fabs(want - _nextPts) > 0.25 ? want : _nextPts + (want - _nextPts) / 16;
+    _nextPts = pts + period;
+
     CMVideoFormatDescriptionRef fmt = NULL;
     CMVideoFormatDescriptionCreateForImageBuffer(NULL, pb, &fmt);
-    CMSampleTimingInfo timing = { kCMTimeInvalid, CMClockGetTime(CMClockGetHostTimeClock()),
+    CMSampleTimingInfo timing = { CMTimeMakeWithSeconds(period, 1000000), CMTimeMakeWithSeconds(pts, 1000000000),
                                   kCMTimeInvalid };
     CMSampleBufferRef sb = NULL;
     CMSampleBufferCreateForImageBuffer(NULL, pb, true, NULL, NULL, fmt, &timing, &sb);
     if (sb) {
-        CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, YES);
-        CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
-        CFDictionarySetValue(d, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+        if (!_timed) { /* no timebase: show it now */
+            CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, YES);
+            CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
+            CFDictionarySetValue(d, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             AVSampleBufferDisplayLayer *layer = self->_preview.displayLayer;
             if (@available(macOS 14.0, *)) {
@@ -553,7 +575,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _lastLock = [NSLock new];
     pthread_mutex_init(&_recLock, NULL);
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
-    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0 }];
+    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0 }];
     NSString *folder = [ud stringForKey:@"folder"];
     _folder = folder ? [NSURL fileURLWithPath:folder]
                      : [NSFileManager.defaultManager URLsForDirectory:NSMoviesDirectory
@@ -602,6 +624,26 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
     [self buildWindow];
     [_inputPopup selectItemAtIndex:input == DVC100_INPUT_SVIDEO ? 1 : 0];
+
+    /* the preview layer's clock is the host clock, so frames can say when to appear (see pushFrame) */
+    CMClockRef host = CMClockGetHostTimeClock();
+    CMTimebaseRef tb = NULL;
+    OSStatus tst;
+    if (@available(macOS 12.0, *)) {
+        tst = CMTimebaseCreateWithSourceClock(NULL, host, &tb);
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        tst = CMTimebaseCreateWithMasterClock(NULL, host, &tb);
+#pragma clang diagnostic pop
+    }
+    if (tst == noErr && tb) {
+        CMTimebaseSetTime(tb, CMClockGetTime(host));
+        CMTimebaseSetRate(tb, 1.0);
+        _preview.displayLayer.controlTimebase = tb;
+        CFRelease(tb);
+        _timed = YES;
+    }
 
     r = dvc100_start(_dev, frame_cb, (__bridge void *)self);
     if (r)
@@ -661,9 +703,16 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _wideCheck.state = _widescreen ? NSControlStateValueOn : NSControlStateValueOff;
     _wideCheck.toolTip = @"Stretch the picture to 16:9 in the preview, snapshots and recordings.";
 
+    _formatPopup = [NSPopUpButton new];
+    [_formatPopup addItemsWithTitles:@[ @"MPEG-2", @"H.264" ]];
+    [_formatPopup selectItemAtIndex:MAX(0, MIN(1, [NSUserDefaults.standardUserDefaults integerForKey:@"format"]))];
+    _formatPopup.target = self;
+    _formatPopup.action = @selector(formatChanged:);
+    _formatPopup.toolTip = @"MPEG-2: a DVD-compatible .mpg, best for burning a DVD. "
+                           @"H.264: a much smaller .mp4 (x264), best for keeping on a computer or sharing.";
+
     _qualityPopup = [NSPopUpButton new];
-    [_qualityPopup addItemsWithTitles:@[ @"Standard (6 Mbit/s)", @"High (8 Mbit/s)", @"Maximum (9.5 Mbit/s)" ]];
-    [_qualityPopup selectItemAtIndex:[NSUserDefaults.standardUserDefaults integerForKey:@"quality"]];
+    [self fillQualityPopup];
     _qualityPopup.target = self;
     _qualityPopup.action = @selector(qualityChanged:);
 
@@ -674,12 +723,13 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [self updateFolderButton];
 
     Box *row1 = stack(@[
-        [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, [self label:@"Quality"], _qualityPopup,
-        [self label:@"Save to"], _folderButton
+        [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, [self label:@"Format"], _formatPopup,
+        [self label:@"Quality"], _qualityPopup, [self label:@"Save to"], _folderButton
     ]);
     row1.spacing = 8;
     [row1 setGap:16 afterView:_inputPopup];
     [row1 setGap:16 afterView:_wideCheck];
+    [row1 setGap:16 afterView:_formatPopup];
     [row1 setGap:16 afterView:_qualityPopup];
 
     /* row 2: record button, time, meters, monitor */
@@ -839,6 +889,27 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [NSUserDefaults.standardUserDefaults setBool:_deinterlace forKey:@"deinterlace"];
 }
 
+/* the quality steps are bitrates for MPEG-2 and x264 constant-quality levels for H.264 */
+static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 };
+
+- (void)fillQualityPopup
+{
+    NSInteger q = MAX(0, MIN(2, [NSUserDefaults.standardUserDefaults integerForKey:@"quality"]));
+    [_qualityPopup removeAllItems];
+    if (_formatPopup.indexOfSelectedItem == 1)
+        [_qualityPopup addItemsWithTitles:@[ @"Standard (CRF 23)", @"High (CRF 20)", @"Maximum (CRF 17)" ]];
+    else
+        [_qualityPopup addItemsWithTitles:@[ @"Standard (6 Mbit/s)", @"High (8 Mbit/s)", @"Maximum (9.5 Mbit/s)" ]];
+    [_qualityPopup selectItemAtIndex:q];
+    [_bar refit];
+}
+
+- (void)formatChanged:(id)sender
+{
+    [NSUserDefaults.standardUserDefaults setInteger:_formatPopup.indexOfSelectedItem forKey:@"format"];
+    [self fillQualityPopup];
+}
+
 - (void)qualityChanged:(id)sender
 {
     [NSUserDefaults.standardUserDefaults setInteger:_qualityPopup.indexOfSelectedItem forKey:@"quality"];
@@ -907,19 +978,23 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (void)startRecording
 {
-    static const int kbps[] = { 6000, 8000, 9500 };
+    rec_codec_t codec = _formatPopup.indexOfSelectedItem == 1 ? REC_H264 : REC_MPEG2;
+    int q = MAX(0, MIN(2, (int)_qualityPopup.indexOfSelectedItem));
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
-    NSString *name = [NSString stringWithFormat:@"DazzleRecorder %@.mpg", [df stringFromDate:NSDate.date]];
+    NSString *name = [NSString stringWithFormat:@"DazzleRecorder %@.%s", [df stringFromDate:NSDate.date],
+                                                rec_extension(codec)];
     NSString *path = [_folder URLByAppendingPathComponent:name].path;
 
     recorder_opts_t o = {
+        .codec = codec,
+        .crf = kH264Crf[q],
         .width = _width,
         .height = _height,
         .pal = _pal,
         .deinterlace = _deinterlace,
         .widescreen = _widescreen,
-        .video_kbps = kbps[MAX(0, MIN(2, (int)_qualityPopup.indexOfSelectedItem))],
+        .video_kbps = kMpegKbps[q],
         .audio_kbps = 224,
         .audio_rate = g_audio_rate,
     };
@@ -943,10 +1018,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
     [_bar refit];
     set_symbol(_recordButton, @"stop.circle.fill", nil);
-    _deintCheck.enabled = _wideCheck.enabled = _qualityPopup.enabled = _folderButton.enabled = _audioPopup.enabled = NO;
+    _deintCheck.enabled = _wideCheck.enabled = _formatPopup.enabled = _qualityPopup.enabled = _folderButton.enabled =
+        _audioPopup.enabled = NO;
     _preview.badge.hidden = NO;
-    [self setStatus:[NSString stringWithFormat:@"Recording %@ MPEG-2 to %@",
-                                               o.deinterlace ? @"deinterlaced" : @"interlaced", name]];
+    [self setStatus:[NSString stringWithFormat:@"Recording %@ %@ to %@", o.deinterlace ? @"deinterlaced" : @"interlaced",
+                                               codec == REC_H264 ? @"H.264" : @"MPEG-2", name]];
 }
 
 - (void)stopRecording
@@ -970,7 +1046,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
             self->_recordButton.title = @"Record";
             [self->_bar refit];
             set_symbol(self->_recordButton, @"record.circle", nil);
-            self->_deintCheck.enabled = self->_wideCheck.enabled = self->_qualityPopup.enabled = self->_folderButton.enabled = self->_audioPopup.enabled = YES;
+            self->_deintCheck.enabled = self->_wideCheck.enabled = self->_formatPopup.enabled =
+                self->_qualityPopup.enabled = self->_folderButton.enabled = self->_audioPopup.enabled = YES;
             self->_preview.badge.hidden = YES;
             if (r == 0) {
                 [self setStatus:[@"Saved " stringByAppendingString:path.lastPathComponent]];
@@ -1058,27 +1135,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
  * through libusb; the black Dazzle's comes from its Core Audio device. Either
  * way it is played via a ring buffer. */
 
-/* Pull n frames from the ring into planar float buffers; returns 0 if all silence. */
+/* Pull n frames from the ring into planar float buffers, 60 ms behind the input; returns 0 if all silence. */
 static volatile int g_monitor = 1; /* AudioUnit path only; AVAudioEngine mutes in its mixer */
 static int ring_render(float *L, float *R, uint32_t n, float gain)
 {
-    const uint64_t target = (uint64_t)g_audio_rate * 60 / 1000, maxlag = (uint64_t)g_audio_rate / 4;
-    uint64_t w = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE), rd = g_ring_r;
-    if (w - rd > maxlag || rd > w)
-        rd = w > target ? w - target : 0; /* drifted too far behind: resync */
-    int any = 0;
-    for (uint32_t i = 0; i < n; i++) {
-        if (rd < w) {
-            L[i] = g_ring[(rd % RING_FRAMES) * 2] / 32768.0f * gain;
-            R[i] = g_ring[(rd % RING_FRAMES) * 2 + 1] / 32768.0f * gain;
-            rd++;
-            any = 1;
-        } else {
-            L[i] = R[i] = 0;
-        }
-    }
-    g_ring_r = rd;
-    return any && gain > 0;
+    return monitor_ring_read(&g_ring, (uint32_t)g_audio_rate * 60 / 1000, NULL, L, R, (int)n, gain);
 }
 
 static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts,
@@ -1138,7 +1199,7 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
     _audioOK = 1;
     pthread_mutex_unlock(&_recLock);
     g_monitor = _monitorCheck.state == NSControlStateValueOn;
-    g_ring_r = __atomic_load_n(&g_ring_w, __ATOMIC_ACQUIRE);
+    monitor_ring_restart(&g_ring);
     if (_engine || _outputUnit)
         return; /* switching the source: the monitor output is already running */
     if (@available(macOS 10.15, *)) {

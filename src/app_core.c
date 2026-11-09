@@ -2,6 +2,7 @@
 #include "app_core.h"
 #include "recorder.h"
 #include "sysaudio.h"
+#include "monitor_ring.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -46,15 +47,15 @@ struct app {
     int w, h, pal;
     volatile int deinterlace;
     volatile int widescreen;
+    int yuyv; /* the preview keeps YUYV frames instead of RGB (app_set_preview_yuyv) */
 
     pthread_mutex_t frame_lock;
     uint32_t *rgb, *spare; /* latest preview frame and the one being converted */
     uint8_t *blend;        /* one deinterlaced YUYV line */
     uint64_t seq;
 
-    int16_t ring[RING_FRAMES * 2];
-    _Alignas(8) volatile uint64_t ring_w;
-    _Alignas(8) volatile uint64_t ring_r;
+    int16_t ring_frames[RING_FRAMES * 2];
+    monitor_ring_t ring;
     volatile int peak[2];
     int audio_rate, audio_ok;
     char audio_problem[260];
@@ -99,6 +100,18 @@ static void frame_cb(const dvc100_frame_t *f, void *user)
     pthread_mutex_unlock(&a->rec_lock);
 
     const size_t stride = (size_t)f->width * 2;
+    if (a->yuyv) {
+        uint8_t *d = (uint8_t *)a->spare;
+        for (int y = 0; y < f->height; y++, d += stride) {
+            const uint8_t *s = f->data + (size_t)y * stride;
+            if (a->deinterlace && y + 1 < f->height) {
+                for (size_t i = 0; i < stride; i++)
+                    d[i] = (uint8_t)((s[i] + s[i + stride] + 1) >> 1);
+            } else {
+                memcpy(d, s, stride);
+            }
+        }
+    } else
     for (int y = 0; y < f->height; y++) {
         const uint8_t *s = f->data + (size_t)y * stride;
         if (a->deinterlace && y + 1 < f->height) {
@@ -127,7 +140,37 @@ int app_get_frame(app_t *a, uint32_t *buf, uint64_t *seq)
     int copied = 0;
     pthread_mutex_lock(&a->frame_lock);
     if (a->seq != *seq) {
-        memcpy(buf, a->rgb, (size_t)a->w * a->h * 4);
+        if (a->yuyv) {
+            const uint8_t *s = (const uint8_t *)a->rgb;
+            for (size_t i = 0, n = (size_t)a->w * a->h; i < n; i += 2, s += 4) {
+                buf[i] = yuv_rgb(s[0], s[1], s[3]);
+                buf[i + 1] = yuv_rgb(s[2], s[1], s[3]);
+            }
+        } else {
+            memcpy(buf, a->rgb, (size_t)a->w * a->h * 4);
+        }
+        *seq = a->seq;
+        copied = 1;
+    }
+    pthread_mutex_unlock(&a->frame_lock);
+    return copied;
+}
+
+void app_set_preview_yuyv(app_t *a, int on)
+{
+    pthread_mutex_lock(&a->frame_lock);
+    a->yuyv = on;
+    memset(a->rgb, on ? 0x80 : 0, (size_t)a->w * a->h * 4); /* grey in YUYV, black in RGB */
+    a->seq++;
+    pthread_mutex_unlock(&a->frame_lock);
+}
+
+int app_get_frame_yuyv(app_t *a, uint8_t *buf, uint64_t *seq)
+{
+    int copied = 0;
+    pthread_mutex_lock(&a->frame_lock);
+    if (a->yuyv && a->seq != *seq) {
+        memcpy(buf, a->rgb, (size_t)a->w * a->h * 2);
         *seq = a->seq;
         copied = 1;
     }
@@ -140,18 +183,7 @@ int app_get_frame(app_t *a, uint32_t *buf, uint64_t *seq)
 static void audio_cb(const int16_t *s, int frames, void *user)
 {
     app_t *a = user;
-    uint64_t w = __atomic_load_n(&a->ring_w, __ATOMIC_ACQUIRE);
-    int pl = 0, pr = 0;
-    for (int i = 0; i < frames; i++, w++) {
-        int16_t l = s[2 * i], r = s[2 * i + 1];
-        a->ring[(w % RING_FRAMES) * 2] = l;
-        a->ring[(w % RING_FRAMES) * 2 + 1] = r;
-        if (abs(l) > pl) pl = abs(l);
-        if (abs(r) > pr) pr = abs(r);
-    }
-    __atomic_store_n(&a->ring_w, w, __ATOMIC_RELEASE);
-    if (pl > a->peak[0]) a->peak[0] = pl;
-    if (pr > a->peak[1]) a->peak[1] = pr;
+    monitor_ring_write(&a->ring, s, frames, a->peak);
 
     pthread_mutex_lock(&a->rec_lock);
     if (a->rec)
@@ -159,25 +191,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     pthread_mutex_unlock(&a->rec_lock);
 }
 
-/* monitor playback: about 60 ms behind the input, resynced if it drifts */
+/* monitor playback: about 60 ms behind the input (see monitor_ring.h) */
 static void output_cb(int16_t *out, int frames, void *user)
 {
     app_t *a = user;
-    const uint64_t target = (uint64_t)a->audio_rate * 60 / 1000, maxlag = (uint64_t)a->audio_rate / 4;
-    uint64_t w = __atomic_load_n(&a->ring_w, __ATOMIC_ACQUIRE), rd = a->ring_r;
-    if (w - rd > maxlag || rd > w)
-        rd = w > target ? w - target : 0;
-    for (int i = 0; i < frames; i++) {
-        if (rd < w && a->monitor) {
-            out[2 * i] = a->ring[(rd % RING_FRAMES) * 2];
-            out[2 * i + 1] = a->ring[(rd % RING_FRAMES) * 2 + 1];
-        } else {
-            out[2 * i] = out[2 * i + 1] = 0;
-        }
-        if (rd < w)
-            rd++;
-    }
-    a->ring_r = rd;
+    monitor_ring_read(&a->ring, (uint32_t)a->audio_rate * 60 / 1000, out, NULL, NULL, frames, a->monitor ? 1.0f : 0.0f);
 }
 
 void app_peaks(app_t *a, double db[2])
@@ -200,7 +218,7 @@ static void start_audio(app_t *a)
     a->audio_problem[0] = 0;
     if ((r = dvc100_audio_start(a->dev, audio_cb, a, &a->audio_rate)) == 0) {
         a->audio_ok = 1;
-        a->ring_r = a->ring_w;
+        monitor_ring_restart(&a->ring);
         if (!a->out) {
             a->out = sa_output_start(a->audio_rate, output_cb, a);
             if (!a->out)
@@ -258,6 +276,8 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
     }
     app_t *a = calloc(1, sizeof(*a));
     a->dev = dev;
+    a->ring.frames = a->ring_frames;
+    a->ring.size = RING_FRAMES;
     a->pal = dvc100_current_norm(dev) == DVC100_NORM_PAL;
     a->w = 720;
     a->h = a->pal ? 576 : 480;
@@ -361,6 +381,11 @@ void app_default_folder(char *out, int len)
         const char *p = getenv("USERPROFILE");
         snprintf(out, (size_t)len, "%s", p ? p : ".");
     }
+#elif defined(__APPLE__)
+    const char *home = getenv("HOME");
+    snprintf(out, (size_t)len, "%s/Movies", home ? home : ".");
+    if (access(out, F_OK) != 0)
+        snprintf(out, (size_t)len, "%s", home ? home : ".");
 #else
     const char *home = getenv("HOME");
     char cfg[1024], line[1024];
@@ -401,6 +426,12 @@ static void settings_path(char *out, size_t len)
     snprintf(dir, sizeof(dir), "%s\\" APP_NAME, base ? base : ".");
     make_dir(dir);
     snprintf(out, len, "%s\\settings.ini", dir);
+#elif defined(__APPLE__)
+    const char *home = getenv("HOME");
+    char dir[1100];
+    snprintf(dir, sizeof(dir), "%s/Library/Application Support/" APP_NAME, home ? home : ".");
+    make_dir(dir);
+    snprintf(out, len, "%s/settings.ini", dir);
 #else
     const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
     char base[1024], dir[1100];
@@ -483,19 +514,35 @@ void app_set_setting_int(const char *key, int v)
 
 /* ---- recording ---- */
 
+const char *const app_quality_names[APP_QUALITIES] = {
+    "MPEG-2 Standard (6 Mbit/s)", "MPEG-2 High (8 Mbit/s)", "MPEG-2 Maximum (9.5 Mbit/s)",
+    "H.264 Standard (CRF 23)",    "H.264 High (CRF 20)",    "H.264 Maximum (CRF 17)",
+};
+
 int app_record_start(app_t *a, const char *folder, int quality, int deinterlace, char *path, int pathlen,
                      char *err, int errlen)
 {
-    static const int kbps[] = { 6000, 8000, 9500 };
+    quality = quality < 0 ? 0 : quality >= APP_QUALITIES ? APP_QUALITIES - 1 : quality;
+    return app_record_start_codec(a, folder, quality >= 3 ? REC_H264 : REC_MPEG2, quality % 3, deinterlace, path,
+                                  pathlen, err, errlen);
+}
+
+int app_record_start_codec(app_t *a, const char *folder, int codec, int level, int deinterlace, char *path,
+                           int pathlen, char *err, int errlen)
+{
+    static const int kbps[] = { 6000, 8000, 9500 }, crf[] = { 23, 20, 17 };
+    int quality = level < 0 ? 0 : level > 2 ? 2 : level;
     make_dir(folder);
-    app_timestamped_path(folder, "mpg", path, pathlen);
+    app_timestamped_path(folder, rec_extension(codec), path, pathlen);
     recorder_opts_t o = {
+        .codec = (rec_codec_t)codec,
+        .crf = crf[quality],
         .width = a->w,
         .height = a->h,
         .pal = a->pal,
         .deinterlace = deinterlace,
         .widescreen = a->widescreen,
-        .video_kbps = kbps[quality < 0 ? 0 : quality > 2 ? 2 : quality],
+        .video_kbps = kbps[quality],
         .audio_kbps = 224,
         .audio_rate = a->audio_rate,
     };

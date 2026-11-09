@@ -37,6 +37,15 @@ is ad-hoc signed, not notarized, so the first time right-click it and choose **O
 System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle.
 `DazzleRecorder-macos-universal.tar.gz` also contains the command line tool and its `ffmpeg`.
 
+#### Older Macs (PowerPC, Mac OS X 10.3 to 10.8)
+
+`DazzleRecorder-macos-legacy-ppc-i386-app.zip` holds **DazzleRecorder Legacy**, the same app for older
+Macs: PowerPC (G3, G4, G5) on Mac OS X 10.3.9 or later, and Intel on 10.4 or later. Its preview uses OpenGL
+and its sound the old Core Audio interfaces. A PowerPC Mac cannot encode H.264 in real time, so there it records
+**DV** (the default, light on the CPU) or **MPEG-2** (with a fast setting; a G4 or G5 is needed); on Intel it
+records MPEG-2 (the default), H.264 or DV. `DazzleRecorder-macos-legacy-ppc-i386.tar.gz` adds the command line
+tool. These builds have not been tested on real old hardware yet; reports are welcome.
+
 ### Windows
 
 Windows 7 SP1 and later, 32- and 64-bit, and Windows on Arm.
@@ -82,9 +91,14 @@ make            # build/dvc100-capture, build/ffmpeg and "build/DazzleRecorder.a
 make test       # packet/field assembler unit test
 ```
 
-libusb is built from `vendor/libusb`. `make` also builds a small LGPL ffmpeg 7.1 from source
-(`scripts/build-ffmpeg.sh`, about a minute) and puts it inside the app; `make BUNDLE_FFMPEG=0` skips that and
+libusb is built from `vendor/libusb`. `make` also builds a small ffmpeg 7.1 with x264 from source
+(`scripts/build-ffmpeg.sh`, a minute or two) and puts it inside the app; `make BUNDLE_FFMPEG=0` skips that and
 uses an ffmpeg on your `PATH` instead. `make ARCHS=arm64 MACOSX_MIN=11.0` builds a single-architecture binary.
+
+The legacy app is built by `scripts/build-legacy-mac.sh` in the `powerpc-apple-darwin8` cross toolchain
+(`ghcr.io/variantxyz/gcc-powerpc-apple-darwin8:build-gcc-14.2-MacOSXSDK10.4u`, with clang, nasm and
+pkg-config added), as the release workflow does. It checks that the PowerPC slice only uses what Mac OS X
+10.3.9 has.
 
 ## Use
 
@@ -98,12 +112,16 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
 * **Widescreen**: off by default. Stretches the picture to 16:9 in the preview, snapshots and recordings
   (the MPEG-2 file is flagged 16:9, so players stretch it too). Use it for tapes recorded in anamorphic widescreen.
 * **Deinterlace**: applies to the preview and the recording. Off records interlaced
-  MPEG-2 (top field first) like a DVD, which is best for burning a DVD later. On
+  video (top field first) like a DVD, which is best for burning a DVD later. On
   uses ffmpeg's yadif and suits computer playback and editing.
-* **Quality**: 6, 8 or 9.5 Mbit/s MPEG-2 video (DVD-legal), 224 kbit/s MP2 stereo audio
+* **Format**: **MPEG-2** (the default) writes a DVD-compatible `.mpg`; **H.264** writes a much smaller
+  `.mp4` with x264 and AAC audio, better for keeping on a computer or sharing. On Windows and Linux both
+  are in the Quality list.
+* **Quality**: MPEG-2 at 6, 8 or 9.5 Mbit/s video (DVD-legal) with 224 kbit/s MP2 stereo audio, or H.264 at
+  x264 constant quality 23, 20 or 17 (lower is better) with 192 kbit/s AAC
 * **Save to**: recording folder (default: your Movies or Videos folder)
-* **Record / Stop** (⌘R on macOS): writes `DazzleRecorder <date>.mpg`, a DVD-compatible
-  MPEG-2 program stream with a 4:3 display aspect (16:9 with Widescreen)
+* **Record / Stop** (⌘R on macOS): writes `DazzleRecorder <date>.mpg` (MPEG-2 program stream) or `.mp4`
+  (H.264), with a 4:3 display aspect (16:9 with Widescreen)
 * **Audio** source (macOS) / **Line In (not Dazzle)** (Windows) / **Audio: Line In** (Linux): record and monitor the computer's Line In
   instead of the Dazzle's own audio, bypassing it (also `--line-in` on macOS)
 * L/R audio meters, **Play audio** to monitor through the speakers, ⌘S saves a PNG snapshot
@@ -131,6 +149,12 @@ Record 60 seconds to MPEG-2 (add `-d` to deinterlace, `-b 9500` for bitrate):
 build/dvc100-capture -t 60 -m tape.mpg
 ```
 
+Or to H.264 with x264 (`-q 18` for higher quality):
+
+```bash
+build/dvc100-capture -t 60 -x tape.mp4
+```
+
 Record 60 seconds of raw video and audio, then mux to MP4:
 
 ```bash
@@ -147,7 +171,8 @@ Audio only:
 build/dvc100-capture --audio-only -a tape.wav
 ```
 
-Options: `-w` (stretch the MPEG-2 recording to 16:9), `-i composite|svideo`, `-n auto|ntsc|pal`, `-f y4m|yuyv`, `-o FILE`,
+Options: `-x FILE.mp4` (H.264 instead of MPEG-2), `-q CRF` (H.264 quality, default 20), `--dv FILE.mov`
+(DV, light on old CPUs), `-w` (flag the recording 16:9), `-i composite|svideo`, `-n auto|ntsc|pal`, `-f y4m|yuyv`, `-o FILE`,
 `-c FRAMES`, `-t SECONDS`, `-m FILE.mpg`, `-d`, `-b KBPS`, `-a FILE.wav`, `--audio-only`, `--brightness/--contrast/--saturation/--hue 0..255`, `-v`/`-vv`
 for register traces.
 
@@ -185,7 +210,8 @@ makensis -DARCH=x86_64 -DVERSION=0.4.0 -DSRC=dist/x86_64-windows-gnu -DOUTFILE=s
 ```
 
 `scripts/fetch-libusbk.sh` downloads the signed libusbK 3.1 driver (BSD licence) that the Windows 7 builds
-install. The bundled ffmpeg is LGPL-2.1; see `resources/licenses/`.
+install. The bundled ffmpeg includes x264 for H.264 recording, which makes it GPL-2.0-or-later (`X264=0` builds an LGPL
+ffmpeg without it); see `resources/licenses/`.
 
 ## Troubleshooting sound
 

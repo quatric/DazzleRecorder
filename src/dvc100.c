@@ -1622,8 +1622,22 @@ void dvc100_stop(dvc100_t *dev)
 
 static void audio_packet(dvc100_t *dev, const uint8_t *p, size_t len)
 {
-    if (dev->audio_cb)
-        dev->audio_cb((const int16_t *)(const void *)p, (int)(len / 4), dev->audio_user);
+    if (!dev->audio_cb)
+        return;
+#if defined(__BIG_ENDIAN__) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+    /* USB audio is little-endian; callers get samples in the CPU's order (PowerPC Macs) */
+    int16_t s[512];
+    while (len >= 4) {
+        size_t n = len / 2 > 512 ? 512 : len / 2 & ~(size_t)1;
+        for (size_t i = 0; i < n; i++)
+            s[i] = (int16_t)(p[2 * i] | p[2 * i + 1] << 8);
+        dev->audio_cb(s, (int)(n / 2), dev->audio_user);
+        p += n * 2;
+        len -= n * 2;
+    }
+#else
+    dev->audio_cb((const int16_t *)(const void *)p, (int)(len / 4), dev->audio_user);
+#endif
 }
 
 static int pick_audio_alt(dvc100_t *dev, int *alt, int *psize, int *rate)

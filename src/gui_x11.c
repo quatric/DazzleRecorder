@@ -144,7 +144,9 @@ static struct {
     unsigned long last_click;
 } G = { .deint = 1, .monitor = 1, .quality = 1, .mu = PTHREAD_MUTEX_INITIALIZER };
 
-static const char *const QUALITY_NAME[] = { "6 Mbit/s", "8 Mbit/s", "9.5 Mbit/s" };
+/* MPEG-2 bitrates, then H.264 (x264) quality levels; see app_quality_names */
+static const char *const QUALITY_NAME[APP_QUALITIES] = { "MPEG-2 6M", "MPEG-2 8M", "MPEG-2 9.5M",
+                                                         "H.264 CRF 23", "H.264 CRF 20", "H.264 CRF 17" };
 
 static void set_status(const char *s)
 {
@@ -319,7 +321,7 @@ static void press(int b)
     case B_QUALITY:
         if (rec)
             break;
-        G.quality = (G.quality + 1) % 3;
+        G.quality = (G.quality + 1) % APP_QUALITIES;
         app_set_setting_int("quality", G.quality);
         break;
     case B_FOLDER:
@@ -453,8 +455,8 @@ static void draw_bar(void)
     x += 82;
     button(d, B_AUDIO, x, 6, 116, G.line_in ? "Audio: Line In" : "Audio: Dazzle", G.line_in, !rec);
     x += 122;
-    button(d, B_QUALITY, x, 6, 84, QUALITY_NAME[G.quality], 0, !rec);
-    x += 90;
+    button(d, B_QUALITY, x, 6, 104, QUALITY_NAME[G.quality], 0, !rec);
+    x += 110;
     button(d, B_FOLDER, x, 6, 70, "Folder...", 0, !rec);
     x += 76;
     button(d, B_OPEN, x, 6, 56, "Open", 0, 1);
@@ -580,7 +582,7 @@ int main(int argc, char **argv)
     G.wide = app_setting_int("widescreen", 0);
     G.monitor = app_setting_int("monitor", 1);
     G.quality = app_setting_int("quality", 1);
-    if (G.quality < 0 || G.quality > 2)
+    if (G.quality < 0 || G.quality >= APP_QUALITIES)
         G.quality = 1;
     app_setting_str("folder", G.folder, sizeof(G.folder), "");
     if (!G.folder[0])
@@ -597,7 +599,7 @@ int main(int argc, char **argv)
     G.root = p_XRootWindow(G.dpy, G.scr);
     G.depth = p_XDefaultDepth(G.dpy, G.scr);
     G.visual = p_XDefaultVisual(G.dpy, G.scr);
-    G.w = 880;
+    G.w = 1000;
     G.h = 600 + BAR_H;
     G.wnd = p_XCreateSimpleWindow(G.dpy, G.root, 0, 0, (unsigned)G.w, (unsigned)G.h, 0, 0, 0);
     G.gc = p_XCreateGC(G.dpy, G.wnd, 0, NULL);
