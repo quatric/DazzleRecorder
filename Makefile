@@ -1,10 +1,11 @@
 CC      ?= clang
 PREFIX  ?= /usr/local
 
-# Universal 2 (Intel + Apple silicon). 10.11 is the oldest macOS current
-# toolchains can target with ARC; the arm64 slice is always 11.0 or later.
+# Universal 2 (Intel + Apple silicon). 10.9 is the oldest macOS current
+# toolchains can still target (libarclite is gone from the SDK, so the ARC file is
+# compiled with -fobjc-arc but linked without it; libobjc has the ARC calls since 10.7); the arm64 slice is always 11.0 or later.
 ARCHS        ?= x86_64 arm64
-MACOSX_MIN   ?= 10.11
+MACOSX_MIN   ?= 10.9
 ARCHFLAGS     = $(foreach a,$(ARCHS),-arch $(a)) -mmacosx-version-min=$(MACOSX_MIN)
 
 V        = vendor/libusb
@@ -57,7 +58,8 @@ $(BUILD)/dvc100-capture: src/capture.c $(BUILD)/dvc100.o $(BUILD)/sysaudio.o $(B
 	$(CC) $(CFLAGS) $^ $(SYSLIBS) -o $@
 
 $(BUILD)/dazzle-capture-app: src/viewer.m $(BUILD)/dvc100.o $(BUILD)/sysaudio.o $(BUILD)/audio_coreaudio.o $(BUILD)/recorder.o $(LIBUSB)
-	$(CC) $(CFLAGS) -fobjc-arc $^ $(SYSLIBS) \
+	$(CC) $(CFLAGS) -fobjc-arc -c src/viewer.m -o $(BUILD)/viewer.o
+	$(CC) $(CFLAGS) $(BUILD)/viewer.o $(filter-out src/viewer.m,$^) $(SYSLIBS) \
 	    -framework Cocoa -framework AVFoundation -framework CoreMedia -framework CoreVideo \
 	    -framework CoreImage -framework QuartzCore -framework AudioUnit -o $@
 	# Newer SDKs' CoreMedia.tbd has a $$ld$$previous rule that, for deployment targets

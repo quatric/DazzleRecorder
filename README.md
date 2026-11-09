@@ -31,7 +31,7 @@ to be installed.
 
 ### macOS
 
-Download `DazzleRecorder-macos-universal-app.zip` (Universal 2: Apple silicon and Intel, macOS 10.11 El Capitan
+Download `DazzleRecorder-macos-universal-app.zip` (Universal 2: Apple silicon and Intel, macOS 10.9 Mavericks
 or later), unzip it and open **Dazzle Capture**. The app
 is ad-hoc signed, not notarized, so the first time right-click it and choose **Open** (or allow it under
 System Settings → Privacy & Security). It may ask for microphone access on the black Dazzle.
@@ -78,7 +78,7 @@ If the [UsbDk](https://github.com/daynix/UsbDk/releases) driver is installed, th
 
 ```bash
 brew install nasm     # for ffmpeg's x86 assembly
-make            # build/dvc100-capture, build/ffmpeg and "build/Dazzle Capture.app" (Universal 2, macOS 10.11+)
+make            # build/dvc100-capture, build/ffmpeg and "build/Dazzle Capture.app" (Universal 2, macOS 10.9+)
 make test       # packet/field assembler unit test
 ```
 

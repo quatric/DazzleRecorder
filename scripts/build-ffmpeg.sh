@@ -46,7 +46,7 @@ FEATURES="--disable-everything --disable-autodetect --disable-doc --disable-debu
 case $TARGET in
 macos-*)
   arch=${TARGET#macos-}
-  min=10.11; [ "$arch" = arm64 ] && min=11.0
+  min=10.9; [ "$arch" = arm64 ] && min=11.0
   CROSS="--target-os=darwin --arch=$arch --enable-cross-compile
     --cc=clang --extra-cflags=-arch\ $arch\ -mmacosx-version-min=$min
     --extra-ldflags=-arch\ $arch\ -mmacosx-version-min=$min"

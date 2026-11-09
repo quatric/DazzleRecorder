@@ -19,6 +19,26 @@
 #define DIR_SEP '/'
 #endif
 
+/* Monotonic clock. clock_gettime() only exists from macOS 10.12, so macOS
+   uses mach_absolute_time(), which is there on every version. */
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#endif
+static void mono_ts(struct timespec *ts)
+{
+#ifdef __APPLE__
+    static mach_timebase_info_data_t tb;
+    if (!tb.denom)
+        mach_timebase_info(&tb);
+    uint64_t t = mach_absolute_time();
+    uint64_t ns = t / tb.denom * tb.numer + t % tb.denom * tb.numer / tb.denom;
+    ts->tv_sec = (time_t)(ns / 1000000000u);
+    ts->tv_nsec = (long)(ns % 1000000000u);
+#else
+    clock_gettime(CLOCK_MONOTONIC, ts);
+#endif
+}
+
 #define RING_FRAMES 32768 /* power of two, ~680 ms at 48 kHz */
 
 struct app {
@@ -463,7 +483,7 @@ int app_record_start(app_t *a, const char *folder, int quality, int deinterlace,
     pthread_mutex_lock(&a->rec_lock);
     a->rec = rec;
     a->silence_frames = a->silence_fed = 0;
-    clock_gettime(CLOCK_MONOTONIC, &a->rec_t0);
+    mono_ts(&a->rec_t0);
     snprintf(a->rec_path, sizeof(a->rec_path), "%s", path);
     pthread_mutex_unlock(&a->rec_lock);
     return 0;
@@ -517,7 +537,7 @@ int app_is_recording(app_t *a)
 double app_record_seconds(app_t *a)
 {
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    mono_ts(&now);
     pthread_mutex_lock(&a->rec_lock);
     double s = a->rec ? (now.tv_sec - a->rec_t0.tv_sec) + (now.tv_nsec - a->rec_t0.tv_nsec) / 1e9 : 0;
     pthread_mutex_unlock(&a->rec_lock);

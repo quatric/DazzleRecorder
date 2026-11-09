@@ -19,6 +19,54 @@
 
 /* ---- AppKit helpers: the modern convenience constructors need 10.12+, SF Symbols 11+ ---- */
 
+/* ---- 10.9 compatibility: the API added in 10.10 and 10.11 is used only where it exists ---- */
+
+static NSColor *label_color(BOOL secondary)
+{
+    if (@available(macOS 10.10, *))
+        return secondary ? label_color(YES) : NSColor.labelColor;
+    return secondary ? NSColor.disabledControlTextColor : NSColor.controlTextColor;
+}
+
+static NSFont *mono_font(CGFloat size, BOOL semibold)
+{
+    if (@available(macOS 10.11, *))
+        return [NSFont monospacedDigitSystemFontOfSize:size
+                                                weight:semibold ? NSFontWeightSemibold : NSFontWeightMedium];
+    return [NSFont userFixedPitchFontOfSize:size];
+}
+
+/* layout anchors and -setActive: need 10.11 / 10.10, so constraints are built the 10.7 way */
+static NSLayoutConstraint *mk(id a, NSLayoutAttribute aa, NSLayoutRelation rel, id b, NSLayoutAttribute ba,
+                              CGFloat mult, CGFloat c)
+{
+    return [NSLayoutConstraint constraintWithItem:a attribute:aa relatedBy:rel toItem:b
+                                        attribute:b ? ba : NSLayoutAttributeNotAnAttribute
+                                       multiplier:mult constant:c];
+}
+
+static void set_active(NSLayoutConstraint *c, BOOL on)
+{
+    if (!c)
+        return;
+    if (@available(macOS 10.10, *)) {
+        c.active = on;
+        return;
+    }
+    id a = c.firstItem, b = c.secondItem;
+    NSView *owner = b ? [a ancestorSharedWithView:b] : a;
+    if (on)
+        [owner addConstraint:c];
+    else
+        [owner removeConstraint:c];
+}
+
+static void activate_all(NSArray<NSLayoutConstraint *> *cs)
+{
+    for (NSLayoutConstraint *c in cs)
+        set_active(c, YES);
+}
+
 static NSTextField *make_label(NSString *s)
 {
     if (@available(macOS 10.12, *))
@@ -30,8 +78,8 @@ static NSTextField *make_label(NSString *s)
     l.editable = NO;
     l.selectable = NO;
     l.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
-    l.textColor = NSColor.labelColor;
-    l.lineBreakMode = NSLineBreakByClipping;
+    l.textColor = label_color(NO);
+    [l.cell setLineBreakMode:NSLineBreakByClipping];
     return l;
 }
 
@@ -81,7 +129,7 @@ static void set_symbol(NSButton *b, NSString *name, NSString *desc)
         [self.layer addSublayer:_displayLayer];
 
         _badge = make_label(@"");
-        _badge.font = [NSFont monospacedDigitSystemFontOfSize:13 weight:NSFontWeightSemibold];
+        _badge.font = mono_font(13, YES);
         _badge.textColor = NSColor.whiteColor;
         _badge.backgroundColor = [NSColor colorWithRed:0.8 green:0.05 blue:0.05 alpha:0.85];
         _badge.drawsBackground = YES;
@@ -138,7 +186,7 @@ static volatile int g_peak[2];
     volatile int _deinterlace;
     int _widescreen;
     NSLayoutConstraint *_aspectConstraint;
-    AVAudioEngine *_engine;
+    id _engine; /* AVAudioEngine, 10.15 and later only */
     CVPixelBufferRef _lastFrame;
     NSLock *_lastLock;
 
@@ -230,7 +278,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     CMSampleTimingInfo timing = { kCMTimeInvalid, CMClockGetTime(CMClockGetHostTimeClock()),
                                   kCMTimeInvalid };
     CMSampleBufferRef sb = NULL;
-    CMSampleBufferCreateReadyWithImageBuffer(NULL, pb, fmt, &timing, &sb);
+    CMSampleBufferCreateForImageBuffer(NULL, pb, true, NULL, NULL, fmt, &timing, &sb);
     if (sb) {
         CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, YES);
         CFMutableDictionaryRef d = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
@@ -245,8 +293,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
             } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                if (layer.status == AVQueuedSampleBufferRenderingStatusFailed)
-                    [layer flush];
+                if (@available(macOS 10.10, *)) {
+                    if (layer.status == AVQueuedSampleBufferRenderingStatusFailed)
+                        [layer flush];
+                }
                 [layer enqueueSampleBuffer:sb];
 #pragma clang diagnostic pop
             }
@@ -329,20 +379,20 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 - (NSTextField *)label:(NSString *)s
 {
     NSTextField *l = make_label(s);
-    l.textColor = NSColor.secondaryLabelColor;
+    l.textColor = label_color(YES);
     return l;
 }
 
 - (NSLevelIndicator *)meter
 {
     NSLevelIndicator *m = [NSLevelIndicator new];
-    m.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity;
+    [(NSLevelIndicatorCell *)m.cell setLevelIndicatorStyle:NSLevelIndicatorStyleContinuousCapacity];
     m.minValue = 0;
     m.maxValue = 60; /* dBFS + 60 */
     m.warningValue = 48;
     m.criticalValue = 57;
-    [m.widthAnchor constraintEqualToConstant:90].active = YES;
-    [m.heightAnchor constraintEqualToConstant:8].active = YES;
+    set_active(mk(m, NSLayoutAttributeWidth, NSLayoutRelationEqual, nil, 0, 1, 90), YES);
+    set_active(mk(m, NSLayoutAttributeHeight, NSLayoutRelationEqual, nil, 0, 1, 8), YES);
     return m;
 }
 
@@ -384,7 +434,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _folderButton = make_button(@"", self, @selector(chooseFolder:), NO);
     _folderButton.bezelStyle = NSBezelStyleRounded;
     set_symbol(_folderButton, @"folder", @"Folder");
-    [_folderButton.widthAnchor constraintLessThanOrEqualToConstant:220].active = YES;
+    set_active(mk(_folderButton, NSLayoutAttributeWidth, NSLayoutRelationLessThanOrEqual, nil, 0, 1, 220), YES);
     [self updateFolderButton];
 
     NSStackView *row1 = [NSStackView stackViewWithViews:@[
@@ -404,10 +454,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         _recordButton.contentTintColor = NSColor.systemRedColor;
     _recordButton.keyEquivalent = @"r";
     _recordButton.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-    [_recordButton.widthAnchor constraintGreaterThanOrEqualToConstant:110].active = YES;
+    set_active(mk(_recordButton, NSLayoutAttributeWidth, NSLayoutRelationGreaterThanOrEqual, nil, 0, 1, 110), YES);
 
     _timeLabel = make_label(@"00:00:00");
-    _timeLabel.font = [NSFont monospacedDigitSystemFontOfSize:15 weight:NSFontWeightMedium];
+    _timeLabel.font = mono_font(15, NO);
 
     _meterL = [self meter];
     _meterR = [self meter];
@@ -424,8 +474,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
                                                                                       : NSControlStateValueOff;
 
     _statusLabel = make_label(@"");
-    _statusLabel.textColor = NSColor.secondaryLabelColor;
-    _statusLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    _statusLabel.textColor = label_color(YES);
+    [_statusLabel.cell setLineBreakMode:NSLineBreakByTruncatingMiddle];
     [_statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
 
@@ -442,16 +492,16 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     NSView *content = [NSView new];
     [content addSubview:_preview];
     [content addSubview:bar];
-    [NSLayoutConstraint activateConstraints:@[
-        [_preview.topAnchor constraintEqualToAnchor:content.topAnchor],
-        [_preview.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
-        [_preview.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
-        [bar.topAnchor constraintEqualToAnchor:_preview.bottomAnchor],
-        [bar.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
-        [bar.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
-        [bar.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
-        [_preview.widthAnchor constraintGreaterThanOrEqualToConstant:720],
-    ]];
+    activate_all(@[
+        mk(_preview, NSLayoutAttributeTop, NSLayoutRelationEqual, content, NSLayoutAttributeTop, 1, 0),
+        mk(_preview, NSLayoutAttributeLeading, NSLayoutRelationEqual, content, NSLayoutAttributeLeading, 1, 0),
+        mk(_preview, NSLayoutAttributeTrailing, NSLayoutRelationEqual, content, NSLayoutAttributeTrailing, 1, 0),
+        mk(bar, NSLayoutAttributeTop, NSLayoutRelationEqual, _preview, NSLayoutAttributeBottom, 1, 0),
+        mk(bar, NSLayoutAttributeLeading, NSLayoutRelationEqual, content, NSLayoutAttributeLeading, 1, 0),
+        mk(bar, NSLayoutAttributeTrailing, NSLayoutRelationEqual, content, NSLayoutAttributeTrailing, 1, 0),
+        mk(bar, NSLayoutAttributeBottom, NSLayoutRelationEqual, content, NSLayoutAttributeBottom, 1, 0),
+        mk(_preview, NSLayoutAttributeWidth, NSLayoutRelationGreaterThanOrEqual, nil, 0, 1, 720),
+    ]);
     [bar setHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
     _preview.widescreen = _widescreen;
     [self applyAspect];
@@ -522,10 +572,9 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 /* the picture is 4:3 or 16:9; the window grows and shrinks around it */
 - (void)applyAspect
 {
-    _aspectConstraint.active = NO;
-    _aspectConstraint = [_preview.heightAnchor constraintEqualToAnchor:_preview.widthAnchor
-                                                            multiplier:_widescreen ? 9.0 / 16 : 3.0 / 4];
-    _aspectConstraint.active = YES;
+    set_active(_aspectConstraint, NO);
+    _aspectConstraint = mk(_preview, NSLayoutAttributeHeight, NSLayoutRelationEqual, _preview, NSLayoutAttributeWidth, _widescreen ? 9.0 / 16 : 3.0 / 4, 0);
+    set_active(_aspectConstraint, YES);
 }
 
 - (void)widescreenChanged:(id)sender
@@ -551,7 +600,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 {
     BOOL on = _monitorCheck.state == NSControlStateValueOn;
     g_monitor = on;
-    _engine.mainMixerNode.outputVolume = on ? 1 : 0;
+    if (@available(macOS 10.15, *))
+        ((AVAudioEngine *)_engine).mainMixerNode.outputVolume = on ? 1 : 0;
     [NSUserDefaults.standardUserDefaults setBool:on forKey:@"monitor"];
 }
 
@@ -649,7 +699,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _recordButton.enabled = NO;
     _recordButton.title = @"Finishing…";
     [self setStatus:@"Finishing the file…"];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         int r = rec_close(rec);
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_recordButton.enabled = YES;
@@ -702,7 +752,15 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [_lastLock unlock];
     if (!pb)
         return;
-    CIImage *img = [CIImage imageWithCVPixelBuffer:pb];
+    CIImage *img;
+    if (@available(macOS 10.11, *)) {
+        img = [CIImage imageWithCVPixelBuffer:pb];
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        img = [CIImage imageWithCVImageBuffer:pb];
+#pragma clang diagnostic pop
+    }
     img = [img imageByApplyingTransform:CGAffineTransformMakeScale((_widescreen ? 854.0 : 640.0) / _width, 480.0 / _height)];
     CIContext *ctx = [CIContext context];
     NSDateFormatter *df = [NSDateFormatter new];
@@ -831,9 +889,9 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
         NSError *err = nil;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations" /* the error: variant needs macOS 27 */
-        [_engine connect:src to:_engine.mainMixerNode format:fmt];
+        [_engine connect:src to:((AVAudioEngine *)_engine).mainMixerNode format:fmt];
 #pragma clang diagnostic pop
-        _engine.mainMixerNode.outputVolume = g_monitor ? 1 : 0;
+        ((AVAudioEngine *)_engine).mainMixerNode.outputVolume = g_monitor ? 1 : 0;
         if (![_engine startAndReturnError:&err])
             [self setStatus:[@"Audio output: " stringByAppendingString:err.localizedDescription]];
         return;
@@ -897,7 +955,8 @@ static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags,
 - (void)applicationWillTerminate:(NSNotification *)note
 {
     [_uiTimer invalidate];
-    [_engine stop];
+    if (@available(macOS 10.15, *))
+        [(AVAudioEngine *)_engine stop];
     if (_outputUnit) {
         AudioOutputUnitStop(_outputUnit);
         AudioComponentInstanceDispose(_outputUnit);
