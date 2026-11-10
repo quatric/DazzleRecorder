@@ -111,7 +111,7 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_MONITOR, B_AUDIO, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -131,7 +131,7 @@ static struct {
     int sw, sh;
     void *img;
     int dirty_picture, dirty_bar;
-    int svideo, deint, wide, monitor, line_in, quality;
+    int svideo, deint, wide, preview, monitor, line_in, quality;
     char folder[1024];
     char status[600];
     double level[2];
@@ -142,7 +142,7 @@ static struct {
     int done_flag, done_ok;
     char done_path[1100];
     unsigned long last_click;
-} G = { .deint = 1, .monitor = 1, .quality = 1, .mu = PTHREAD_MUTEX_INITIALIZER };
+} G = { .deint = 1, .preview = 1, .monitor = 1, .quality = 1, .mu = PTHREAD_MUTEX_INITIALIZER };
 
 /* MPEG-2 bitrates, then H.264 (x264) quality levels; see app_quality_names */
 static const char *const QUALITY_NAME[APP_QUALITIES] = { "MPEG-2 6M", "MPEG-2 8M", "MPEG-2 9.5M",
@@ -299,11 +299,18 @@ static void press(int b)
         app_set_deinterlace(G.app, G.deint);
         app_set_setting_int("deinterlace", G.deint);
         break;
+    case B_PREVIEW:
+        G.preview = !G.preview;
+        app_set_preview(G.app, G.preview);
+        app_set_setting_int("preview", G.preview);
+        G.dirty_picture = 1;
+        break;
     case B_WIDE:
         if (rec)
             break;
         G.wide = !G.wide;
         app_set_widescreen(G.app, G.wide);
+    app_set_preview(G.app, G.preview);
         app_set_setting_int("widescreen", G.wide);
         break;
     case B_MONITOR:
@@ -382,7 +389,7 @@ static void draw_picture(void)
     memset(G.scaled, 0, (size_t)G.sw * G.sh * 4);
     int px, py, pw, ph;
     picture_rect(&px, &py, &pw, &ph);
-    if (G.frame && pw > 0 && ph > 0) {
+    if (G.preview && G.frame && pw > 0 && ph > 0) {
         int *xm = malloc(sizeof(int) * (size_t)pw);
         if (xm) {
             for (int x = 0; x < pw; x++)
@@ -450,6 +457,8 @@ static void draw_bar(void)
     button(d, B_DEINT, x, 6, 100, G.deint ? "Deinterlace" : "Interlaced", G.deint, !rec);
     x += 106;
     button(d, B_WIDE, x, 6, 84, G.wide ? "Widescreen" : "4:3", G.wide, !rec);
+    x += 90;
+    button(d, B_PREVIEW, x, 6, 84, G.preview ? "Preview" : "No preview", G.preview, 1);
     x += 90;
     button(d, B_MONITOR, x, 6, 76, G.monitor ? "Monitor" : "Muted", G.monitor, 1);
     x += 82;
@@ -527,6 +536,8 @@ static void handle(XEvent *e)
             press(B_INPUT);
         else if (k == 'm' || k == 'M')
             press(B_MONITOR);
+        else if (k == 'e' || k == 'E')
+            press(B_PREVIEW);
         else if (k == 'f' || k == 'F' || k == XK_F11)
             toggle_fullscreen();
         else if (k == XK_Escape && G.fullscreen)
@@ -580,6 +591,7 @@ int main(int argc, char **argv)
     G.svideo = input == DVC100_INPUT_SVIDEO;
     G.deint = app_setting_int("deinterlace", 1);
     G.wide = app_setting_int("widescreen", 0);
+    G.preview = app_setting_int("preview", 1);
     G.monitor = app_setting_int("monitor", 1);
     G.quality = app_setting_int("quality", 1);
     if (G.quality < 0 || G.quality >= APP_QUALITIES)

@@ -111,6 +111,8 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
 * **Input**: Composite or S-Video
 * **Widescreen**: off by default. Stretches the picture to 16:9 in the preview, snapshots and recordings
   (the MPEG-2 file is flagged 16:9, so players stretch it too). Use it for tapes recorded in anamorphic widescreen.
+* **Preview**: on by default. Turn it off to stop drawing the picture and save CPU on slow computers; recording and
+  the sound carry on. Snapshots need it on (Linux: `E`; Mac: View > Show Preview, `Cmd+E`).
 * **Deinterlace**: applies to the preview and the recording. Off records interlaced
   video (top field first) like a DVD, which is best for burning a DVD later. On
   uses ffmpeg's yadif and suits computer playback and editing.

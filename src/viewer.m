@@ -365,7 +365,7 @@ static Box *stack(NSArray<NSView *> *views)
 
 @interface DVCPreview : NSView
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *displayLayer;
-@property(nonatomic, strong) NSTextField *badge;
+@property(nonatomic, strong) NSTextField *badge, *message;
 @property(nonatomic) BOOL widescreen;
 @end
 
@@ -387,6 +387,12 @@ static Box *stack(NSArray<NSView *> *views)
         _badge.drawsBackground = YES;
         _badge.hidden = YES;
         [self addSubview:_badge];
+
+        _message = make_label(@"Preview off");
+        _message.font = [NSFont systemFontOfSize:15];
+        _message.textColor = [NSColor colorWithWhite:0.7 alpha:1];
+        _message.hidden = YES;
+        [self addSubview:_message];
     }
     return self;
 }
@@ -413,6 +419,9 @@ static Box *stack(NSArray<NSView *> *views)
     [CATransaction commit];
     [_badge sizeToFit];
     _badge.frame = NSMakeRect(NSMinX(r) + 10, NSMinY(r) + 10, _badge.frame.size.width + 8, 20);
+    [_message sizeToFit];
+    _message.frame = NSMakeRect(NSMidX(r) - _message.frame.size.width / 2, NSMidY(r) - _message.frame.size.height / 2,
+                                _message.frame.size.width, _message.frame.size.height);
 }
 @end
 
@@ -436,6 +445,7 @@ static volatile int g_peak[2];
     int _audioOK;                         /* audio input running; otherwise recordings get silence */
     uint64_t _silenceFrames, _silenceFed;
     volatile int _deinterlace;
+    volatile int _previewOn; /* 0: frames are not converted or shown (recording is unaffected) */
     int _widescreen;
     NSLayoutConstraint *_aspectConstraint;
     id _engine; /* AVAudioEngine, 10.15 and later only */
@@ -452,7 +462,7 @@ static volatile int g_peak[2];
     int _recDeinterlaced;
 
     NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup;
-    NSButton *_deintCheck, *_wideCheck, *_monitorCheck, *_recordButton, *_folderButton;
+    NSButton *_deintCheck, *_wideCheck, *_previewCheck, *_monitorCheck, *_recordButton, *_folderButton;
     Box *_bar;
     NSTextField *_timeLabel, *_statusLabel;
     NSLevelIndicator *_meterL, *_meterR;
@@ -497,6 +507,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     }
     pthread_mutex_unlock(&_recLock);
 
+    if (!_previewOn)
+        return;
     CVPixelBufferRef pb = NULL;
     if (CVPixelBufferPoolCreatePixelBuffer(NULL, _pool, &pb) != kCVReturnSuccess)
         return;
@@ -575,13 +587,14 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _lastLock = [NSLock new];
     pthread_mutex_init(&_recLock, NULL);
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
-    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0 }];
+    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"preview" : @YES, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0 }];
     NSString *folder = [ud stringForKey:@"folder"];
     _folder = folder ? [NSURL fileURLWithPath:folder]
                      : [NSFileManager.defaultManager URLsForDirectory:NSMoviesDirectory
                                                             inDomains:NSUserDomainMask].firstObject;
     _deinterlace = [ud boolForKey:@"deinterlace"];
     _widescreen = [ud boolForKey:@"widescreen"];
+    _previewOn = [ud boolForKey:@"preview"];
     dvc100_input_t input = [ud integerForKey:@"input"] == 1 ? DVC100_INPUT_SVIDEO : DVC100_INPUT_COMPOSITE;
 
     dvc100_norm_t norm = DVC100_NORM_AUTO;
@@ -703,6 +716,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _wideCheck.state = _widescreen ? NSControlStateValueOn : NSControlStateValueOff;
     _wideCheck.toolTip = @"Stretch the picture to 16:9 in the preview, snapshots and recordings.";
 
+    _previewCheck = make_button(@"Preview", self, @selector(previewChanged:), YES);
+    _previewCheck.state = _previewOn ? NSControlStateValueOn : NSControlStateValueOff;
+    _previewCheck.toolTip = @"Show the picture. Off saves the computer the work of drawing it; recording and sound go on.";
+
     _formatPopup = [NSPopUpButton new];
     [_formatPopup addItemsWithTitles:@[ @"MPEG-2", @"H.264" ]];
     [_formatPopup selectItemAtIndex:MAX(0, MIN(1, [NSUserDefaults.standardUserDefaults integerForKey:@"format"]))];
@@ -723,12 +740,12 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [self updateFolderButton];
 
     Box *row1 = stack(@[
-        [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, [self label:@"Format"], _formatPopup,
+        [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, _previewCheck, [self label:@"Format"], _formatPopup,
         [self label:@"Quality"], _qualityPopup, [self label:@"Save to"], _folderButton
     ]);
     row1.spacing = 8;
     [row1 setGap:16 afterView:_inputPopup];
-    [row1 setGap:16 afterView:_wideCheck];
+    [row1 setGap:16 afterView:_previewCheck];
     [row1 setGap:16 afterView:_formatPopup];
     [row1 setGap:16 afterView:_qualityPopup];
 
@@ -835,6 +852,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     NSMenu *view = [[NSMenu alloc] initWithTitle:@"View"];
     [view addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]
         .keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
+    [view addItemWithTitle:@"Show Preview" action:@selector(togglePreview:) keyEquivalent:@"e"];
     viewItem.submenu = view;
     NSApp.mainMenu = bar;
 }
@@ -881,6 +899,32 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [NSUserDefaults.standardUserDefaults setBool:_widescreen forKey:@"widescreen"];
     _preview.widescreen = _widescreen;
     [self applyAspect];
+}
+
+- (void)previewChanged:(id)sender
+{
+    _previewOn = _previewCheck.state == NSControlStateValueOn;
+    [NSUserDefaults.standardUserDefaults setBool:_previewOn forKey:@"preview"];
+    _preview.message.hidden = _previewOn;
+    if (!_previewOn) {
+        [_lastLock lock];
+        if (_lastFrame)
+            CVPixelBufferRelease(_lastFrame);
+        _lastFrame = NULL;
+        [_lastLock unlock];
+        AVSampleBufferDisplayLayer *layer = _preview.displayLayer;
+        if (@available(macOS 14.0, *))
+            [layer.sampleBufferRenderer flushWithRemovalOfDisplayedImage:YES completionHandler:nil];
+        else
+            [layer flushAndRemoveImage];
+    }
+    [_preview setNeedsLayout:YES];
+}
+
+- (void)togglePreview:(id)sender
+{
+    _previewCheck.state = _previewCheck.state == NSControlStateValueOn ? NSControlStateValueOff : NSControlStateValueOn;
+    [self previewChanged:sender];
 }
 
 - (void)deinterlaceChanged:(id)sender
@@ -963,6 +1007,8 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
 {
     if (item.action == @selector(toggleRecord:))
         item.title = _rec ? @"Stop Recording" : @"Start Recording";
+    if (item.action == @selector(togglePreview:))
+        item.state = _previewOn ? NSControlStateValueOn : NSControlStateValueOff;
     return YES;
 }
 
@@ -1092,8 +1138,10 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
     [_lastLock lock];
     CVPixelBufferRef pb = _lastFrame ? CVPixelBufferRetain(_lastFrame) : NULL;
     [_lastLock unlock];
-    if (!pb)
+    if (!pb) {
+        [self setStatus:_previewOn ? @"No picture to save yet." : @"Turn the preview on to save a snapshot."];
         return;
+    }
     CIImage *img;
     if (@available(macOS 10.11, *)) {
         img = [CIImage imageWithCVPixelBuffer:pb];

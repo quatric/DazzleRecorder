@@ -75,6 +75,7 @@ static NSString *format_name(int codec)
 - (void)setFrameWidth:(int)w height:(int)h;
 - (void)setWidescreen:(BOOL)on;
 - (void)poll;
+- (void)clear;
 - (void)drawPicture;
 @end
 
@@ -149,6 +150,15 @@ static NSString *format_name(int codec)
     else
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, _w, _h, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, _buf);
     _haveFrame = YES;
+    [self drawPicture];
+}
+
+- (void)clear
+{
+    _haveFrame = NO;
+    if (!_glReady)
+        return;
+    [[self openGLContext] makeCurrentContext];
     [self drawPicture];
 }
 
@@ -252,7 +262,7 @@ static NSString *format_name(int codec)
     PreviewView *_preview;
     NSView *_bar;
     NSPopUpButton *_input, *_format, *_quality, *_audio;
-    NSButton *_deint, *_wide, *_monitor, *_record, *_folderButton;
+    NSButton *_deint, *_wide, *_previewCheck, *_monitor, *_record, *_folderButton;
     NSTextField *_time, *_status;
     MeterView *_meters;
     NSTimer *_timer;
@@ -367,7 +377,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 - (void)layoutBar
 {
     NSRect b = [_bar bounds];
-    NSArray *row1 = [NSArray arrayWithObjects:[self label:@"Input"], _input, [NSNumber numberWithFloat:8], _deint, _wide,
+    NSArray *row1 = [NSArray arrayWithObjects:[self label:@"Input"], _input, [NSNumber numberWithFloat:8], _deint, _wide, _previewCheck,
                                               [NSNumber numberWithFloat:8], [self label:@"Format"], _format,
                                               [self label:@"Quality"], _quality, [NSNumber numberWithFloat:8],
                                               [self label:@"Save to"], _folderButton, nil];
@@ -520,12 +530,15 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     _audio = make_popup([NSArray arrayWithObjects:@"Dazzle", @"Line In", nil], self, @selector(audioChanged:));
     [_audio selectItemAtIndex:[ud integerForKey:@"audioSource"] == 1 ? 1 : 0];
     [_audio setToolTip:@"Record and play the sound from the Dazzle, or from this computer's Line In instead."];
+    _previewCheck = make_button(@"Preview", self, @selector(previewChanged:), YES);
+    [_previewCheck setState:[ud boolForKey:@"preview"] ? NSOnState : NSOffState];
+    [_previewCheck setToolTip:@"Show the picture. Off saves the computer the work of drawing it; recording and sound go on."];
     _status = make_label(@"");
     [_status setTextColor:[NSColor disabledControlTextColor]];
     [[_status cell] setLineBreakMode:NSLineBreakByTruncatingMiddle];
     [_status setAutoresizingMask:NSViewWidthSizable];
 
-    NSArray *all = [NSArray arrayWithObjects:_input, _deint, _wide, _format, _quality, _folderButton, _record, _time,
+    NSArray *all = [NSArray arrayWithObjects:_input, _deint, _wide, _previewCheck, _format, _quality, _folderButton, _record, _time,
                                              _meters, _monitor, _audio, _status, nil];
     for (i = 0; i < (int)[all count]; i++)
         [_bar addSubview:[all objectAtIndex:i]];
@@ -542,7 +555,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     NSUserDefaults *ud = [self ud];
     NSDictionary *defaults = [NSDictionary dictionaryWithObjectsAndKeys:
         [NSNumber numberWithInt:0], @"input", [NSNumber numberWithBool:YES], @"deinterlace",
-        [NSNumber numberWithBool:NO], @"widescreen", [NSNumber numberWithInt:kFormats[0]], @"format",
+        [NSNumber numberWithBool:NO], @"widescreen", [NSNumber numberWithBool:YES], @"preview", [NSNumber numberWithInt:kFormats[0]], @"format",
         [NSNumber numberWithInt:1], @"quality", [NSNumber numberWithBool:YES], @"monitor",
         [NSNumber numberWithInt:0], @"audioSource", nil];
     [ud registerDefaults:defaults];
@@ -575,6 +588,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     }
     app_set_deinterlace(g_app, [ud boolForKey:@"deinterlace"]);
     app_set_widescreen(g_app, [ud boolForKey:@"widescreen"]);
+    app_set_preview(g_app, [ud boolForKey:@"preview"]);
     app_set_monitor(g_app, [ud boolForKey:@"monitor"]);
     [self buildWindow];
     const char *problem = app_audio_problem(g_app);
@@ -616,6 +630,16 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     BOOL on = [_deint state] == NSOnState;
     app_set_deinterlace(g_app, on);
     [[self ud] setBool:on forKey:@"deinterlace"];
+}
+
+- (void)previewChanged:(id)sender
+{
+    (void)sender;
+    BOOL on = [_previewCheck state] == NSOnState;
+    app_set_preview(g_app, on);
+    [[self ud] setBool:on forKey:@"preview"];
+    if (!on)
+        [_preview clear];
 }
 
 - (void)widescreenChanged:(id)sender

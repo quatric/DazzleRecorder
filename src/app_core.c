@@ -47,6 +47,7 @@ struct app {
     int w, h, pal;
     volatile int deinterlace;
     volatile int widescreen;
+    volatile int preview; /* 0: frames are not converted for display (recording is unaffected) */
     int yuyv; /* the preview keeps YUYV frames instead of RGB (app_set_preview_yuyv) */
 
     pthread_mutex_t frame_lock;
@@ -99,6 +100,8 @@ static void frame_cb(const dvc100_frame_t *f, void *user)
     }
     pthread_mutex_unlock(&a->rec_lock);
 
+    if (!a->preview)
+        return;
     const size_t stride = (size_t)f->width * 2;
     if (a->yuyv) {
         uint8_t *d = (uint8_t *)a->spare;
@@ -281,6 +284,7 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
     a->pal = dvc100_current_norm(dev) == DVC100_NORM_PAL;
     a->w = 720;
     a->h = a->pal ? 576 : 480;
+    a->preview = 1;
     a->rgb = calloc((size_t)a->w * a->h, 4);
     a->spare = calloc((size_t)a->w * a->h, 4);
     a->blend = malloc((size_t)a->w * 2);
@@ -323,6 +327,8 @@ int app_height(app_t *a) { return a->h; }
 int app_is_pal(app_t *a) { return a->pal; }
 void app_set_input(app_t *a, dvc100_input_t input) { dvc100_set_input(a->dev, input); }
 void app_set_deinterlace(app_t *a, int on) { a->deinterlace = on; }
+void app_set_preview(app_t *a, int on) { a->preview = on != 0; }
+int app_preview(app_t *a) { return a->preview; }
 void app_set_widescreen(app_t *a, int on) { a->widescreen = on; }
 
 /* ---- files ---- */
@@ -699,6 +705,10 @@ static int write_png(const char *path, const uint8_t *rgb, int w, int h)
 int app_snapshot(app_t *a, const char *folder, char *path, int pathlen, char *err, int errlen)
 {
     /* 720 BT.601 samples span a 4:3 picture: resample to square pixels (or stretch to 16:9) */
+    if (!a->preview) {
+        snprintf(err, (size_t)errlen, "Turn the preview on to save a snapshot.");
+        return -1;
+    }
     const int oh = a->h, ow = a->widescreen ? oh * 16 / 9 / 2 * 2 : a->pal ? 768 : 640;
     uint32_t *src = malloc((size_t)a->w * a->h * 4);
     uint8_t *dst = malloc((size_t)ow * oh * 3);
