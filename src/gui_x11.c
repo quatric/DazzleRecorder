@@ -111,7 +111,7 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_FOLDER, B_OPEN, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_COUNT };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -131,7 +131,7 @@ static struct {
     int sw, sh;
     void *img;
     int dirty_picture, dirty_bar;
-    int svideo, deint, wide, preview, monitor, line_in, quality;
+    int svideo, deint, wide, preview, stop_after, monitor, line_in, quality;
     char folder[1024];
     char status[600];
     double level[2];
@@ -302,6 +302,7 @@ static void press(int b)
     case B_PREVIEW:
         G.preview = !G.preview;
         app_set_preview(G.app, G.preview);
+    app_set_stop_after(G.app, G.stop_after);
         app_set_setting_int("preview", G.preview);
         G.dirty_picture = 1;
         break;
@@ -324,6 +325,11 @@ static void press(int b)
         G.line_in = !G.line_in;
         app_set_audio_source(G.app, G.line_in); /* also saves the setting */
         set_status(app_audio_problem(G.app));
+        break;
+    case B_STOPAFTER:
+        G.stop_after = (G.stop_after + 1) % APP_STOP_AFTERS;
+        app_set_stop_after(G.app, G.stop_after);
+        app_set_setting_int("stop_after", G.stop_after);
         break;
     case B_QUALITY:
         if (rec)
@@ -479,11 +485,13 @@ static void draw_bar(void)
     meter(d, 20, 42, 120, G.level[0]);
     text(d, 150, 50, "R", rgb(170, 170, 170));
     meter(d, 162, 42, 120, G.level[1]);
+    snprintf(buf, sizeof(buf), "Stop: %s", app_stop_after_names[G.stop_after]);
+    button(d, B_STOPAFTER, 296, 36, 124, buf, G.stop_after > 0, 1);
     snprintf(buf, sizeof(buf), "%s", G.status);
-    int maxc = (G.w - 300) / 6;
+    int maxc = (G.w - 440) / 6;
     if (maxc > 0 && (int)strlen(buf) > maxc)
         buf[maxc] = 0;
-    text(d, 296, 50, buf, rgb(200, 200, 200));
+    text(d, 432, 50, buf, rgb(200, 200, 200));
 
     p_XCopyArea(G.dpy, d, G.wnd, G.gc, 0, 0, (unsigned)G.w, BAR_H, 0, G.h - BAR_H);
     G.dirty_bar = 0;
@@ -592,6 +600,9 @@ int main(int argc, char **argv)
     G.deint = app_setting_int("deinterlace", 1);
     G.wide = app_setting_int("widescreen", 0);
     G.preview = app_setting_int("preview", 1);
+    G.stop_after = app_setting_int("stop_after", 0);
+    if (G.stop_after < 0 || G.stop_after >= APP_STOP_AFTERS)
+        G.stop_after = 0;
     G.monitor = app_setting_int("monitor", 1);
     G.quality = app_setting_int("quality", 1);
     if (G.quality < 0 || G.quality >= APP_QUALITIES)
@@ -666,6 +677,8 @@ int main(int argc, char **argv)
         if (t - last_ui >= 50) {
             last_ui = t;
             tick_ui();
+            if (!G.finishing && app_stop_after_due(G.app))
+                toggle_record(); /* "Stop after" */
         }
         if (G.dirty_picture)
             draw_picture();

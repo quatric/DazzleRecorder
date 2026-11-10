@@ -461,7 +461,7 @@ static volatile int g_peak[2];
     NSDate *_recStart;
     int _recDeinterlaced;
 
-    NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup;
+    NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup, *_stopAfterPopup;
     NSButton *_deintCheck, *_wideCheck, *_previewCheck, *_monitorCheck, *_recordButton, *_folderButton;
     Box *_bar;
     NSTextField *_timeLabel, *_statusLabel;
@@ -787,8 +787,16 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _audioPopup.toolTip = @"Record and play the sound from the Dazzle, or from this computer's Line In instead "
                           @"(the Dazzle's own audio is then bypassed).";
 
+    _stopAfterPopup = [NSPopUpButton new];
+    [_stopAfterPopup addItemsWithTitles:@[ @"No limit", @"5 min", @"10 min", @"15 min", @"30 min", @"1 hour",
+                                           @"1.5 hours", @"2 hours", @"3 hours" ]];
+    [_stopAfterPopup selectItemAtIndex:MAX(0, MIN(8, [NSUserDefaults.standardUserDefaults integerForKey:@"stopAfter"]))];
+    _stopAfterPopup.target = self;
+    _stopAfterPopup.action = @selector(stopAfterChanged:);
+    _stopAfterPopup.toolTip = @"Stop the recording by itself after this long.";
+
     Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, [self label:@"Audio"], _audioPopup,
-                         _statusLabel ]);
+                         [self label:@"Stop after"], _stopAfterPopup, _statusLabel ]);
     row2.flexible = _statusLabel;
     row2.spacing = 16;
 
@@ -1017,6 +1025,13 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
 
 /* ---- recording ---- */
 
+static const int kStopAfterMinutes[] = { 0, 5, 10, 15, 30, 60, 90, 120, 180 };
+
+- (void)stopAfterChanged:(id)sender
+{
+    [NSUserDefaults.standardUserDefaults setInteger:_stopAfterPopup.indexOfSelectedItem forKey:@"stopAfter"];
+}
+
 - (void)toggleRecord:(id)sender
 {
     if (_rec)
@@ -1127,6 +1142,9 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
         _timeLabel.stringValue = [NSString stringWithFormat:@"%02d:%02d:%02d", s / 3600, s / 60 % 60, s % 60];
         _preview.badge.stringValue = [NSString stringWithFormat:@"● REC %@", _timeLabel.stringValue];
         [_preview setNeedsLayout:YES];
+        int mins = kStopAfterMinutes[MAX(0, MIN(8, (int)_stopAfterPopup.indexOfSelectedItem))];
+        if (mins > 0 && t >= mins * 60.0)
+            [self stopRecording]; /* "Stop after" */
     } else if (!_recordButton.enabled) {
         /* finishing */
     } else {

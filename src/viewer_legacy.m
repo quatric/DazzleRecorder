@@ -262,6 +262,7 @@ static NSString *format_name(int codec)
     PreviewView *_preview;
     NSView *_bar;
     NSPopUpButton *_input, *_format, *_quality, *_audio;
+    NSPopUpButton *_stopAfter;
     NSButton *_deint, *_wide, *_previewCheck, *_monitor, *_record, *_folderButton;
     NSTextField *_time, *_status;
     MeterView *_meters;
@@ -381,7 +382,8 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
                                               [NSNumber numberWithFloat:8], [self label:@"Format"], _format,
                                               [self label:@"Quality"], _quality, [NSNumber numberWithFloat:8],
                                               [self label:@"Save to"], _folderButton, nil];
-    NSArray *row2 = [NSArray arrayWithObjects:_record, _time, _meters, _monitor, [self label:@"Audio"], _audio, nil];
+    NSArray *row2 = [NSArray arrayWithObjects:_record, _time, _meters, _monitor, [self label:@"Audio"], _audio,
+                                              [self label:@"Stop after"], _stopAfter, nil];
     unsigned i;
     for (i = 0; i < [row1 count]; i++) {
         id v = [row1 objectAtIndex:i];
@@ -394,6 +396,8 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     fit(_monitor, 0, 0);
     fit([self label:@"Audio"], 0, 0);
     fit(_audio, 0, 0);
+    fit([self label:@"Stop after"], 0, 0);
+    fit(_stopAfter, 0, 0);
     place_row(row1, 12, 44, 26, 6);
     float x = place_row(row2, 12, 8, 28, 12);
     NSRect sf = [_status frame];
@@ -532,6 +536,16 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     _audio = make_popup([NSArray arrayWithObjects:@"Dazzle", @"Line In", nil], self, @selector(audioChanged:));
     [_audio selectItemAtIndex:[ud integerForKey:@"audioSource"] == 1 ? 1 : 0];
     [_audio setToolTip:@"Record and play the sound from the Dazzle, or from this computer's Line In instead."];
+    {
+        NSMutableArray *names = [NSMutableArray array];
+        int k;
+        for (k = 0; k < APP_STOP_AFTERS; k++)
+            [names addObject:[NSString stringWithUTF8String:app_stop_after_names[k]]];
+        _stopAfter = make_popup(names, self, @selector(stopAfterChanged:));
+        [_stopAfter selectItemAtIndex:[ud integerForKey:@"stopAfter"] >= 0 && [ud integerForKey:@"stopAfter"] < APP_STOP_AFTERS ? [ud integerForKey:@"stopAfter"] : 0];
+        [_stopAfter setToolTip:@"Stop the recording by itself after this long."];
+        app_set_stop_after(g_app, (int)[_stopAfter indexOfSelectedItem]);
+    }
     _previewCheck = make_button(@"Preview", self, @selector(previewChanged:), YES);
     [_previewCheck setState:[ud boolForKey:@"preview"] ? NSOnState : NSOffState];
     [_previewCheck setToolTip:@"Show the picture. Off saves the computer the work of drawing it; recording and sound go on."];
@@ -541,7 +555,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     [_status setAutoresizingMask:NSViewWidthSizable];
 
     NSArray *all = [NSArray arrayWithObjects:_input, _deint, _wide, _previewCheck, _format, _quality, _folderButton, _record, _time,
-                                             _meters, _monitor, _audio, _status, nil];
+                                             _meters, _monitor, _audio, _stopAfter, _status, nil];
     for (i = 0; i < (int)[all count]; i++)
         [_bar addSubview:[all objectAtIndex:i]];
     [self updateFolderButton];
@@ -632,6 +646,13 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     BOOL on = [_deint state] == NSOnState;
     app_set_deinterlace(g_app, on);
     [[self ud] setBool:on forKey:@"deinterlace"];
+}
+
+- (void)stopAfterChanged:(id)sender
+{
+    (void)sender;
+    app_set_stop_after(g_app, (int)[_stopAfter indexOfSelectedItem]);
+    [[self ud] setInteger:[_stopAfter indexOfSelectedItem] forKey:@"stopAfter"];
 }
 
 - (void)previewChanged:(id)sender
@@ -806,6 +827,8 @@ static void rec_done(void *user, int ok, const char *path)
     [_preview poll];
     if (++_ticks % 3)
         return;
+    if (!_finishing && app_stop_after_due(g_app))
+        [self toggleRecord:nil]; /* "Stop after" */
     double db[2];
     app_peaks(g_app, db);
     int c;

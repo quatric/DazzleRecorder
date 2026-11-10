@@ -22,7 +22,7 @@
 
 enum {
     ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_PREVIEW, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_LINEIN, ID_TIME, ID_STATUS, ID_METER_L,
-    ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R,
+    ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R, ID_LBL_STOP, ID_STOPAFTER,
     IDM_RECORD = 200, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
     TIMER_FRAME = 1, TIMER_UI = 2,
     WM_APP_RECDONE = WM_APP + 1,
@@ -32,7 +32,8 @@ static struct {
     HINSTANCE inst;
     HWND wnd, preview;
     HWND input, deint, wide, previewchk, quality, folder_btn, record, monitor, linein, time, status, meter[2];
-    HWND labels[5];
+    HWND labels[6];
+    HWND stopafter;
     HFONT font, time_font, badge_font;
     HBRUSH bar_brush;
     HMENU menu;
@@ -234,6 +235,10 @@ static void layout(void)
     x += S(100 + 12);
     MoveWindow(G.linein, x, y2 + S(4), S(130), lh, TRUE);
     x += S(130 + 12);
+    MoveWindow(G.labels[5], x, y2 + S(6), S(62), lh, TRUE);
+    x += S(62 + 4);
+    MoveWindow(G.stopafter, x, y2 + S(2), S(100), S(200), TRUE);
+    x += S(100 + 12);
     MoveWindow(G.status, x, y2 + S(6), c.right - x - S(12), lh, TRUE);
     (void)ch;
 }
@@ -276,6 +281,13 @@ static void build_controls(void)
     G.meter[1] = make(L"STATIC", L"", SS_OWNERDRAW, ID_METER_R);
     G.monitor = make(L"BUTTON", L"Play audio", BS_AUTOCHECKBOX | WS_TABSTOP, ID_MONITOR);
     G.linein = make(L"BUTTON", L"Line In (not Dazzle)", BS_AUTOCHECKBOX | WS_TABSTOP, ID_LINEIN);
+    G.labels[5] = make(L"STATIC", L"Stop after", 0, ID_LBL_STOP);
+    G.stopafter = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, ID_STOPAFTER);
+    for (int i = 0; i < APP_STOP_AFTERS; i++) {
+        wchar_t wn[32];
+        MultiByteToWideChar(CP_UTF8, 0, app_stop_after_names[i], -1, wn, 32);
+        SendMessageW(G.stopafter, CB_ADDSTRING, 0, (LPARAM)wn);
+    }
     G.status = make(L"STATIC", L"", SS_ENDELLIPSIS | SS_NOPREFIX, ID_STATUS);
 }
 
@@ -414,7 +426,8 @@ static void toggle_fullscreen(void)
 {
     DWORD style = (DWORD)GetWindowLongW(G.wnd, GWL_STYLE);
     HWND bar[] = { G.input, G.deint, G.wide, G.previewchk, G.quality, G.folder_btn, G.record, G.monitor, G.linein, G.time, G.status,
-                   G.meter[0], G.meter[1], G.labels[0], G.labels[1], G.labels[2], G.labels[3], G.labels[4] };
+                   G.meter[0], G.meter[1], G.labels[0], G.labels[1], G.labels[2], G.labels[3], G.labels[4], G.labels[5],
+                   G.stopafter };
     G.fullscreen = !G.fullscreen;
     for (size_t i = 0; i < sizeof(bar) / sizeof(bar[0]); i++)
         ShowWindow(bar[i], G.fullscreen ? SW_HIDE : SW_SHOW);
@@ -451,6 +464,8 @@ static void tick_ui(void)
         char t[32];
         snprintf(t, sizeof(t), "%02d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
         set_text(G.time, t);
+        if (!G.finishing && app_stop_after_due(G.app))
+            toggle_record(); /* "Stop after" */
     } else if (!G.finishing) {
         set_text(G.time, "00:00:00");
     }
@@ -472,7 +487,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_CTLCOLORSTATIC:
         if ((HWND)lp == G.status || (HWND)lp == G.labels[0] || (HWND)lp == G.labels[1] ||
-            (HWND)lp == G.labels[2] || (HWND)lp == G.labels[3] || (HWND)lp == G.labels[4])
+            (HWND)lp == G.labels[2] || (HWND)lp == G.labels[3] || (HWND)lp == G.labels[4] || (HWND)lp == G.labels[5])
             SetTextColor((HDC)wp, GetSysColor(COLOR_GRAYTEXT));
         SetBkColor((HDC)wp, GetSysColor(COLOR_BTNFACE));
         return (LRESULT)G.bar_brush;
@@ -515,6 +530,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             InvalidateRect(G.preview, NULL, TRUE);
             return 0;
         }
+        case ID_STOPAFTER:
+            if (HIWORD(wp) == CBN_SELCHANGE) {
+                int i = (int)SendMessageW(G.stopafter, CB_GETCURSEL, 0, 0);
+                app_set_stop_after(G.app, i);
+                app_set_setting_int("stop_after", i);
+            }
+            return 0;
         case ID_PREVIEW: {
             int on = SendMessageW(G.previewchk, BM_GETCHECK, 0, 0) == BST_CHECKED;
             preview_on = on;
@@ -720,6 +742,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     int wide = app_setting_int("widescreen", 0);
     SendMessageW(G.wide, BM_SETCHECK, wide ? BST_CHECKED : BST_UNCHECKED, 0);
     app_widescreen_on = wide;
+    {
+        int sa = app_setting_int("stop_after", 0);
+        sa = sa < 0 || sa >= APP_STOP_AFTERS ? 0 : sa;
+        SendMessageW(G.stopafter, CB_SETCURSEL, sa, 0);
+        app_set_stop_after(G.app, sa);
+    }
     app_set_widescreen(G.app, wide);
     preview_on = app_setting_int("preview", 1);
     SendMessageW(G.previewchk, BM_SETCHECK, preview_on ? BST_CHECKED : BST_UNCHECKED, 0);
