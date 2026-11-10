@@ -690,7 +690,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 - (void)buildWindow
 {
     _window = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 800, 600 + 90)
+        initWithContentRect:NSMakeRect(0, 0, 800, MIN(600 + 90, NSScreen.mainScreen.visibleFrame.size.height - 60))
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                             NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
                     backing:NSBackingStoreBuffered
@@ -890,6 +890,9 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 {
     set_active(_aspectConstraint, NO);
     _aspectConstraint = mk(_preview, NSLayoutAttributeHeight, NSLayoutRelationEqual, _preview, NSLayoutAttributeWidth, _widescreen ? 9.0 / 16 : 3.0 / 4, 0);
+    /* not required: on a short screen the window may be shorter than the picture's aspect asks for, and the
+     * preview letterboxes (a required one pushed the controls under the Dock) */
+    _aspectConstraint.priority = 700;
     set_active(_aspectConstraint, YES);
 }
 

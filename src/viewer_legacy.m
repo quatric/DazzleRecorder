@@ -470,7 +470,9 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 {
     NSUserDefaults *ud = [self ud];
     int barH = 78;
-    NSRect frame = NSMakeRect(0, 0, 800, 600 + barH);
+    /* short screens: keep the controls clear of the Dock */
+    float maxH = (float)[[NSScreen mainScreen] visibleFrame].size.height - 60;
+    NSRect frame = NSMakeRect(0, 0, 800, 600 + barH > maxH ? maxH : 600 + barH);
     _window = [[NSWindow alloc] initWithContentRect:frame
                                           styleMask:NSTitledWindowMask | NSClosableWindowMask |
                                                     NSMiniaturizableWindowMask | NSResizableWindowMask

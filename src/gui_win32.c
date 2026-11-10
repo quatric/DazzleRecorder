@@ -696,6 +696,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
     RECT r = { 0, 0, S(960), S(600 + BAR_H) };
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, TRUE);
+    {
+        /* short screens: stay inside the work area, clear of the taskbar */
+        RECT wa;
+        if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0)) {
+            if (r.bottom - r.top > wa.bottom - wa.top)
+                r.bottom = r.top + (wa.bottom - wa.top);
+            if (r.right - r.left > wa.right - wa.left)
+                r.right = r.left + (wa.right - wa.left);
+        }
+    }
     G.wnd = CreateWindowExW(0, L"DazzleCapture", L"DazzleRecorder", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                             CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, NULL, NULL, inst,
                             NULL);
