@@ -39,12 +39,10 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
-/* Y0 Cb Y1 Cr bytes: the packed 16-bit type whose first byte in memory is luma */
-#ifdef __BIG_ENDIAN__
+/* Y0 Cb Y1 Cr bytes (YUYV). Tested on a little-endian GPU: _REV gives the right colours and the plain type
+ * (Cb Y Cr Y) mixes luma into chroma, a green and purple outline of everything. The driver describes the
+ * short, not the memory, so the same type serves PowerPC. */
 #define YUYV_TYPE GL_UNSIGNED_SHORT_8_8_REV_APPLE
-#else
-#define YUYV_TYPE GL_UNSIGNED_SHORT_8_8_APPLE
-#endif
 
 #define TEX_SIZE 1024 /* power of two, holds 720x576 */
 
@@ -120,12 +118,7 @@ static NSString *format_name(int codec)
     [[self openGLContext] setValues:&one forParameter:NSOpenGLCPSwapInterval];
     const char *ext = (const char *)glGetString(GL_EXTENSIONS);
     _ycbcr = ext && strstr(ext, "GL_APPLE_ycbcr_422") != NULL;
-    /* The card's YCbCr conversion is there to spare a PowerPC's CPU. On Intel, and when asked for with
-     * `defaults write <bundle id> softwareColor -bool YES`, convert on the CPU: it cannot get the colours wrong
-     * (a wrong YCbCr byte order shows as a green and purple outline of everything). */
-#ifndef __BIG_ENDIAN__
-    _ycbcr = NO;
-#endif
+    /* `defaults write <bundle id> softwareColor -bool YES` converts on the CPU instead of the card */
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"softwareColor"])
         _ycbcr = NO;
     app_set_preview_yuyv(g_app, _ycbcr); /* otherwise app_core converts to RGB itself */
