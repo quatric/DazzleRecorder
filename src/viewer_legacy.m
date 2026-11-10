@@ -120,6 +120,14 @@ static NSString *format_name(int codec)
     [[self openGLContext] setValues:&one forParameter:NSOpenGLCPSwapInterval];
     const char *ext = (const char *)glGetString(GL_EXTENSIONS);
     _ycbcr = ext && strstr(ext, "GL_APPLE_ycbcr_422") != NULL;
+    /* The card's YCbCr conversion is there to spare a PowerPC's CPU. On Intel, and when asked for with
+     * `defaults write <bundle id> softwareColor -bool YES`, convert on the CPU: it cannot get the colours wrong
+     * (a wrong YCbCr byte order shows as a green and purple outline of everything). */
+#ifndef __BIG_ENDIAN__
+    _ycbcr = NO;
+#endif
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"softwareColor"])
+        _ycbcr = NO;
     app_set_preview_yuyv(g_app, _ycbcr); /* otherwise app_core converts to RGB itself */
     _seq = 0;
     glGenTextures(1, &_tex);
