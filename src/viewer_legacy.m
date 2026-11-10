@@ -263,7 +263,7 @@ static NSString *format_name(int codec)
     PreviewView *_preview;
     NSView *_bar;
     NSPopUpButton *_input, *_format, *_quality, *_audio;
-    NSPopUpButton *_stopAfter;
+    NSComboBox *_stopAfter;
     NSButton *_deint, *_wide, *_previewCheck, *_monitor, *_record, *_folderButton;
     NSTextField *_time, *_status;
     MeterView *_meters;
@@ -398,7 +398,11 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     fit([self label:@"Audio"], 0, 0);
     fit(_audio, 0, 0);
     fit([self label:@"Stop after"], 0, 0);
-    fit(_stopAfter, 0, 0);
+    {
+        NSRect sf2 = [_stopAfter frame];
+        sf2.size.width = 120;
+        [_stopAfter setFrame:sf2];
+    }
     place_row(row1, 12, 44, 26, 6);
     float x = place_row(row2, 12, 8, 28, 12);
     NSRect sf = [_status frame];
@@ -537,16 +541,25 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     _audio = make_popup([NSArray arrayWithObjects:@"Dazzle", @"Line In", nil], self, @selector(audioChanged:));
     [_audio selectItemAtIndex:[ud integerForKey:@"audioSource"] == 1 ? 1 : 0];
     [_audio setToolTip:@"Record and play the sound from the Dazzle, or from this computer's Line In instead."];
+    _stopAfter = [[[NSComboBox alloc] initWithFrame:NSMakeRect(0, 0, 120, 22)] autorelease];
+    [_stopAfter setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
     {
-        NSMutableArray *names = [NSMutableArray array];
-        int k;
+        int k, saved;
+        char lb[48];
         for (k = 0; k < APP_STOP_AFTERS; k++)
-            [names addObject:[NSString stringWithUTF8String:app_stop_after_names[k]]];
-        _stopAfter = make_popup(names, self, @selector(stopAfterChanged:));
-        [_stopAfter selectItemAtIndex:[ud integerForKey:@"stopAfter"] >= 0 && [ud integerForKey:@"stopAfter"] < APP_STOP_AFTERS ? [ud integerForKey:@"stopAfter"] : 0];
-        [_stopAfter setToolTip:@"Stop the recording by itself after this long."];
-        app_set_stop_after(g_app, (int)[_stopAfter indexOfSelectedItem]);
+            [_stopAfter addItemWithObjectValue:[NSString stringWithUTF8String:app_stop_after_names[k]]];
+        [_stopAfter setTarget:self];
+        [_stopAfter setAction:@selector(stopAfterChanged:)];
+        [_stopAfter setDelegate:self]; /* typing a time and leaving the box counts too */
+        saved = [ud objectForKey:@"stopAfterMinutes"] ? (int)[ud integerForKey:@"stopAfterMinutes"]
+                                                      : app_stop_after_from_index((int)[ud integerForKey:@"stopAfter"]);
+        if (saved < 0 || saved > APP_STOP_AFTER_MAX)
+            saved = 0;
+        app_stop_after_label(saved, lb, sizeof(lb));
+        [_stopAfter setStringValue:[NSString stringWithUTF8String:lb]];
+        app_set_stop_after_minutes(g_app, saved);
     }
+    [_stopAfter setToolTip:@"Stop the recording by itself after this long.\nPick a time, or type your own: 45, 2h, 1:30..."];
     _previewCheck = make_button(@"Preview", self, @selector(previewChanged:), YES);
     [_previewCheck setState:[ud boolForKey:@"preview"] ? NSOnState : NSOffState];
     [_previewCheck setToolTip:@"Show the picture. Off saves the computer the work of drawing it; recording and sound go on."];
@@ -651,9 +664,21 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 
 - (void)stopAfterChanged:(id)sender
 {
+    int mins = app_parse_stop_after([[_stopAfter stringValue] UTF8String]);
+    char lb[48];
     (void)sender;
-    app_set_stop_after(g_app, (int)[_stopAfter indexOfSelectedItem]);
-    [[self ud] setInteger:[_stopAfter indexOfSelectedItem] forKey:@"stopAfter"];
+    if (mins < 0)
+        mins = (int)[[self ud] integerForKey:@"stopAfterMinutes"]; /* not a time: keep the last one */
+    app_stop_after_label(mins, lb, sizeof(lb));
+    [_stopAfter setStringValue:[NSString stringWithUTF8String:lb]];
+    app_set_stop_after_minutes(g_app, mins);
+    [[self ud] setInteger:mins forKey:@"stopAfterMinutes"];
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)n
+{
+    if ([n object] == _stopAfter)
+        [self stopAfterChanged:_stopAfter];
 }
 
 - (void)previewChanged:(id)sender

@@ -131,7 +131,7 @@ static struct {
     int sw, sh;
     void *img;
     int dirty_picture, dirty_bar;
-    int svideo, deint, wide, preview, stop_after, monitor, line_in, quality;
+    int svideo, deint, wide, preview, stop_min, monitor, line_in, quality;
     char folder[1024];
     char status[600];
     double level[2];
@@ -285,6 +285,14 @@ static void set_input(int svideo)
     G.dirty_bar = 1;
 }
 
+static void set_stop_min(int m)
+{
+    G.stop_min = m < 0 ? 0 : m > APP_STOP_AFTER_MAX ? APP_STOP_AFTER_MAX : m;
+    app_set_stop_after_minutes(G.app, G.stop_min);
+    app_set_setting_int("stop_after_min", G.stop_min);
+    G.dirty_bar = 1;
+}
+
 static void press(int b)
 {
     int rec = app_is_recording(G.app);
@@ -302,7 +310,6 @@ static void press(int b)
     case B_PREVIEW:
         G.preview = !G.preview;
         app_set_preview(G.app, G.preview);
-    app_set_stop_after(G.app, G.stop_after);
         app_set_setting_int("preview", G.preview);
         G.dirty_picture = 1;
         break;
@@ -327,9 +334,15 @@ static void press(int b)
         set_status(app_audio_problem(G.app));
         break;
     case B_STOPAFTER:
-        G.stop_after = (G.stop_after + 1) % APP_STOP_AFTERS;
-        app_set_stop_after(G.app, G.stop_after);
-        app_set_setting_int("stop_after", G.stop_after);
+        { /* the next preset up from the current time; after the longest, back to no limit */
+            int i, next = 0;
+            for (i = 0; i < APP_STOP_AFTERS; i++)
+                if (app_stop_after_minutes[i] > G.stop_min) {
+                    next = app_stop_after_minutes[i];
+                    break;
+                }
+            set_stop_min(next);
+        }
         break;
     case B_QUALITY:
         if (rec)
@@ -485,8 +498,10 @@ static void draw_bar(void)
     meter(d, 20, 42, 120, G.level[0]);
     text(d, 150, 50, "R", rgb(170, 170, 170));
     meter(d, 162, 42, 120, G.level[1]);
-    snprintf(buf, sizeof(buf), "Stop: %s", app_stop_after_names[G.stop_after]);
-    button(d, B_STOPAFTER, 296, 36, 124, buf, G.stop_after > 0, 1);
+    char sl[48];
+    app_stop_after_label(G.stop_min, sl, sizeof(sl));
+    snprintf(buf, sizeof(buf), "Stop: %s", sl);
+    button(d, B_STOPAFTER, 296, 36, 124, buf, G.stop_min > 0, 1);
     snprintf(buf, sizeof(buf), "%s", G.status);
     int maxc = (G.w - 440) / 6;
     if (maxc > 0 && (int)strlen(buf) > maxc)
@@ -550,6 +565,10 @@ static void handle(XEvent *e)
             toggle_fullscreen();
         else if (k == XK_Escape && G.fullscreen)
             toggle_fullscreen();
+        else if (k == '+' || k == '=' || k == 0xffab) /* a custom "Stop after": +/- change it by a minute */
+            set_stop_min(G.stop_min + 1);
+        else if (k == '-' || k == '_' || k == 0xffad)
+            set_stop_min(G.stop_min - 1);
         else if (k == 'q' || k == 'Q')
             G.finishing = -1;
         break;
@@ -600,9 +619,12 @@ int main(int argc, char **argv)
     G.deint = app_setting_int("deinterlace", 1);
     G.wide = app_setting_int("widescreen", 0);
     G.preview = app_setting_int("preview", 1);
-    G.stop_after = app_setting_int("stop_after", 0);
-    if (G.stop_after < 0 || G.stop_after >= APP_STOP_AFTERS)
-        G.stop_after = 0;
+    G.stop_min = app_setting_int("stop_after_min", -1);
+    if (G.stop_min < 0) /* an older version saved the position of a preset */
+        G.stop_min = app_stop_after_from_index(app_setting_int("stop_after", 0));
+    if (G.stop_min > APP_STOP_AFTER_MAX)
+        G.stop_min = 0;
+    app_set_stop_after_minutes(G.app, G.stop_min);
     G.monitor = app_setting_int("monitor", 1);
     G.quality = app_setting_int("quality", 1);
     if (G.quality < 0 || G.quality >= APP_QUALITIES)

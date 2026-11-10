@@ -17,6 +17,7 @@
 #include "dvc100.h"
 #include "monitor_ring.h"
 #include "recorder.h"
+#include "stopafter.h"
 #include "sysaudio.h"
 
 /* ---- AudioComponent / AudioUnit calls, looked up at run time ----
@@ -461,7 +462,9 @@ static volatile int g_peak[2];
     NSDate *_recStart;
     int _recDeinterlaced;
 
-    NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup, *_stopAfterPopup;
+    NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup;
+    NSComboBox *_stopAfterPopup;
+    int _stopAfterMin; /* minutes, 0 = no limit */
     NSButton *_deintCheck, *_wideCheck, *_previewCheck, *_monitorCheck, *_recordButton, *_folderButton;
     Box *_bar;
     NSTextField *_timeLabel, *_statusLabel;
@@ -787,13 +790,24 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _audioPopup.toolTip = @"Record and play the sound from the Dazzle, or from this computer's Line In instead "
                           @"(the Dazzle's own audio is then bypassed).";
 
-    _stopAfterPopup = [NSPopUpButton new];
-    [_stopAfterPopup addItemsWithTitles:@[ @"No limit", @"5 min", @"10 min", @"15 min", @"30 min", @"1 hour",
-                                           @"1.5 hours", @"2 hours", @"3 hours" ]];
-    [_stopAfterPopup selectItemAtIndex:MAX(0, MIN(8, [NSUserDefaults.standardUserDefaults integerForKey:@"stopAfter"]))];
+    _stopAfterPopup = [NSComboBox new];
+    for (int i = 0; i < SA_PRESETS; i++)
+        [_stopAfterPopup addItemWithObjectValue:@(sa_preset_names[i])];
     _stopAfterPopup.target = self;
     _stopAfterPopup.action = @selector(stopAfterChanged:);
-    _stopAfterPopup.toolTip = @"Stop the recording by itself after this long.";
+    _stopAfterPopup.delegate = (id)self; /* typing a time and leaving the box counts too */
+    limit_size(_stopAfterPopup, 120, 0, 0);
+    {
+        NSUserDefaults *sud = NSUserDefaults.standardUserDefaults;
+        int saved = [sud objectForKey:@"stopAfterMinutes"] ? (int)[sud integerForKey:@"stopAfterMinutes"]
+                                                           : sa_from_index((int)[sud integerForKey:@"stopAfter"]);
+        char lb[48];
+        saved = MAX(0, MIN(SA_MAX, saved));
+        sa_label(saved, lb, sizeof(lb));
+        _stopAfterPopup.stringValue = @(lb);
+        _stopAfterMin = saved;
+    }
+    _stopAfterPopup.toolTip = @"Stop the recording by itself after this long. Pick a time, or type your own: 45, 2h, 1:30...";
 
     Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, [self label:@"Audio"], _audioPopup,
                          [self label:@"Stop after"], _stopAfterPopup, _statusLabel ]);
@@ -1025,11 +1039,28 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
 
 /* ---- recording ---- */
 
-static const int kStopAfterMinutes[] = { 0, 5, 10, 15, 30, 60, 90, 120, 180 };
-
 - (void)stopAfterChanged:(id)sender
 {
-    [NSUserDefaults.standardUserDefaults setInteger:_stopAfterPopup.indexOfSelectedItem forKey:@"stopAfter"];
+    [self applyStopAfter];
+}
+
+/* Reads the "Stop after" box (a preset or a typed time), shows it tidily and remembers it. */
+- (void)applyStopAfter
+{
+    int mins = sa_parse(_stopAfterPopup.stringValue.UTF8String);
+    if (mins < 0)
+        mins = (int)[NSUserDefaults.standardUserDefaults integerForKey:@"stopAfterMinutes"]; /* not a time: keep the last one */
+    char lb[48];
+    sa_label(mins, lb, sizeof(lb));
+    _stopAfterPopup.stringValue = @(lb);
+    _stopAfterMin = mins;
+    [NSUserDefaults.standardUserDefaults setInteger:mins forKey:@"stopAfterMinutes"];
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)n
+{
+    if (n.object == _stopAfterPopup)
+        [self applyStopAfter];
 }
 
 - (void)toggleRecord:(id)sender
@@ -1142,8 +1173,7 @@ static const int kStopAfterMinutes[] = { 0, 5, 10, 15, 30, 60, 90, 120, 180 };
         _timeLabel.stringValue = [NSString stringWithFormat:@"%02d:%02d:%02d", s / 3600, s / 60 % 60, s % 60];
         _preview.badge.stringValue = [NSString stringWithFormat:@"● REC %@", _timeLabel.stringValue];
         [_preview setNeedsLayout:YES];
-        int mins = kStopAfterMinutes[MAX(0, MIN(8, (int)_stopAfterPopup.indexOfSelectedItem))];
-        if (mins > 0 && t >= mins * 60.0)
+        if (_stopAfterMin > 0 && t >= _stopAfterMin * 60.0)
             [self stopRecording]; /* "Stop after" */
     } else if (!_recordButton.enabled) {
         /* finishing */
