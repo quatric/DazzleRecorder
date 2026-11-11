@@ -693,14 +693,14 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 - (void)buildWindow
 {
     _window = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 800, MIN(600 + 90, NSScreen.mainScreen.visibleFrame.size.height - 60))
+        initWithContentRect:NSMakeRect(0, 0, MIN(560, NSScreen.mainScreen.visibleFrame.size.width - 40), MIN(420 + 150, NSScreen.mainScreen.visibleFrame.size.height - 60))
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                             NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
                     backing:NSBackingStoreBuffered
                       defer:NO];
     _window.delegate = self;
     _window.title = @"DazzleRecorder";
-    _window.frameAutosaveName = @"DazzleCaptureWindow";
+    _window.frameAutosaveName = @"DazzleCaptureWindow2"; /* the old name remembered a larger window */
 
     _preview = [[DVCPreview alloc] initWithFrame:NSZeroRect];
     _preview.translatesAutoresizingMaskIntoConstraints = NO;
@@ -742,15 +742,13 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     limit_size(_folderButton, 0, 220, 0);
     [self updateFolderButton];
 
+    /* short rows rather than two long ones, so the window can be narrow */
     Box *row1 = stack(@[
-        [self label:@"Input"], _inputPopup, _deintCheck, _wideCheck, _previewCheck, [self label:@"Format"], _formatPopup,
-        [self label:@"Quality"], _qualityPopup, [self label:@"Save to"], _folderButton
+        [self label:@"Input"], _inputPopup, [self label:@"Format"], _formatPopup, [self label:@"Quality"], _qualityPopup
     ]);
     row1.spacing = 8;
     [row1 setGap:16 afterView:_inputPopup];
-    [row1 setGap:16 afterView:_previewCheck];
     [row1 setGap:16 afterView:_formatPopup];
-    [row1 setGap:16 afterView:_qualityPopup];
 
     /* row 2: record button, time, meters, monitor */
     _recordButton = make_button(@"Record", self, @selector(toggleRecord:), NO);
@@ -796,7 +794,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _stopAfterPopup.target = self;
     _stopAfterPopup.action = @selector(stopAfterChanged:);
     _stopAfterPopup.delegate = (id)self; /* typing a time and leaving the box counts too */
-    limit_size(_stopAfterPopup, 120, 0, 0);
+    limit_size(_stopAfterPopup, 120, 0, 24); /* a combo box has no intrinsic height on 10.9 */
     {
         NSUserDefaults *sud = NSUserDefaults.standardUserDefaults;
         int saved = [sud objectForKey:@"stopAfterMinutes"] ? (int)[sud integerForKey:@"stopAfterMinutes"]
@@ -809,12 +807,20 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     }
     _stopAfterPopup.toolTip = @"Stop the recording by itself after this long. Pick a time, or type your own: 45, 2h, 1:30...";
 
-    Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, [self label:@"Audio"], _audioPopup,
-                         [self label:@"Stop after"], _stopAfterPopup, _statusLabel ]);
+    Box *rowA = stack(@[ [self label:@"Audio"], _audioPopup, [self label:@"Stop after"], _stopAfterPopup,
+                         [self label:@"Save to"], _folderButton ]);
+    rowA.spacing = 8;
+    [rowA setGap:16 afterView:_audioPopup];
+    [rowA setGap:16 afterView:_stopAfterPopup];
+
+    Box *rowOpt = stack(@[ _deintCheck, _wideCheck, _previewCheck ]);
+    rowOpt.spacing = 16;
+
+    Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
     row2.flexible = _statusLabel;
     row2.spacing = 16;
 
-    Box *bar = stack(@[ row1, row2 ]);
+    Box *bar = stack(@[ row1, rowA, rowOpt, row2 ]);
     bar.orientation = NSUserInterfaceLayoutOrientationVertical;
     bar.spacing = 8;
     bar.edgeInsets = NSEdgeInsetsMake(10, 12, 10, 12);
@@ -832,7 +838,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         mk(bar, NSLayoutAttributeLeading, NSLayoutRelationEqual, content, NSLayoutAttributeLeading, 1, 0),
         mk(bar, NSLayoutAttributeTrailing, NSLayoutRelationEqual, content, NSLayoutAttributeTrailing, 1, 0),
         mk(bar, NSLayoutAttributeBottom, NSLayoutRelationEqual, content, NSLayoutAttributeBottom, 1, 0),
-        mk(_preview, NSLayoutAttributeWidth, NSLayoutRelationGreaterThanOrEqual, nil, 0, 1, 720),
+        mk(_preview, NSLayoutAttributeWidth, NSLayoutRelationGreaterThanOrEqual, nil, 0, 1, 360),
     ]);
     [bar setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
     [bar setContentCompressionResistancePriority:NSLayoutPriorityRequired
