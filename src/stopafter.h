@@ -6,10 +6,11 @@
 #include <string.h>
 
 #define SA_MAX 5999
-#define SA_PRESETS 9
-static const int sa_preset_minutes[SA_PRESETS] = { 0, 5, 10, 15, 30, 60, 90, 120, 180 };
+#define SA_PRESETS 14
+static const int sa_preset_minutes[SA_PRESETS] = { 0, 5, 10, 15, 30, 60, 90, 120, 180, 240, 360, 480, 600, 720 };
 static const char *const sa_preset_names[SA_PRESETS] = { "No limit", "5 min", "10 min", "15 min", "30 min",
-                                                         "1 hour", "1.5 hours", "2 hours", "3 hours" };
+                                                         "1 hour", "1.5 hours", "2 hours", "3 hours",
+    "4 hours", "6 hours", "8 hours", "10 hours", "12 hours" };
 
 static int sa_parse(const char *text)
 {

@@ -138,7 +138,7 @@ struct dvc100 {
 const char *dvc100_strerror(int err)
 {
     if (err == DVC100_ERR_NO_DEVICE)
-        return "no Dazzle capture device found";
+        return "No Dazzle capture device found";
     if (err == DVC100_ERR_I2C)
         return "I2C transfer failed (no ACK)";
     if (err == DVC100_ERR_TIMEOUT)

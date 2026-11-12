@@ -196,11 +196,11 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     pthread_mutex_unlock(&a->rec_lock);
 }
 
-/* monitor playback: about 60 ms behind the input (see monitor_ring.h) */
+/* monitor playback: about 100 ms behind the input (see monitor_ring.h) */
 static void output_cb(int16_t *out, int frames, void *user)
 {
     app_t *a = user;
-    monitor_ring_read(&a->ring, (uint32_t)a->audio_rate * 60 / 1000, out, NULL, NULL, frames, a->monitor ? 1.0f : 0.0f);
+    monitor_ring_read(&a->ring, (uint32_t)a->audio_rate * 100 / 1000, out, NULL, NULL, frames, a->monitor ? 1.0f : 0.0f);
 }
 
 void app_peaks(app_t *a, double db[2])
@@ -611,9 +611,10 @@ int app_is_recording(app_t *a)
     return r;
 }
 
-const int app_stop_after_minutes[APP_STOP_AFTERS] = { 0, 5, 10, 15, 30, 60, 90, 120, 180 };
+const int app_stop_after_minutes[APP_STOP_AFTERS] = { 0, 5, 10, 15, 30, 60, 90, 120, 180, 240, 360, 480, 600, 720 };
 const char *const app_stop_after_names[APP_STOP_AFTERS] = { "No limit", "5 min", "10 min", "15 min", "30 min",
-                                                            "1 hour", "1.5 hours", "2 hours", "3 hours" };
+                                                            "1 hour", "1.5 hours", "2 hours", "3 hours",
+    "4 hours", "6 hours", "8 hours", "10 hours", "12 hours" };
 
 void app_set_stop_after(app_t *a, int index)
 {

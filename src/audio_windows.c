@@ -242,6 +242,8 @@ static void fail_audio(HRESULT hr)
 static void *capture_thread(void *arg)
 {
     sa_input_t *in = arg;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST); /* the preview must not starve the audio */
+    timeBeginPeriod(1);
     IMMDeviceEnumerator *en = NULL;
     IMMDevice *dev = NULL;
     IAudioClient *ac = NULL;
@@ -331,6 +333,7 @@ out:
     if (ac) IAudioClient_Release(ac);
     if (dev) IMMDevice_Release(dev);
     if (en) IMMDeviceEnumerator_Release(en);
+    timeEndPeriod(1);
     if (com)
         CoUninitialize();
     return NULL;
@@ -381,7 +384,7 @@ void sa_input_stop(sa_input_t *in)
 /* ---- playback ---- */
 
 #define OUT_BUFS 6
-#define OUT_FRAMES 480 /* 10 ms at 48 kHz */
+#define OUT_FRAMES 960 /* 20 ms at 48 kHz: 10 ms buffers glitch when the machine is busy */
 
 struct sa_output {
     HWAVEOUT wo;
@@ -398,6 +401,7 @@ struct sa_output {
 static void *playback_thread(void *arg)
 {
     sa_output_t *out = arg;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     while (!out->quit) {
         for (int i = 0; i < OUT_BUFS; i++) {
             WAVEHDR *h = &out->hdr[i];

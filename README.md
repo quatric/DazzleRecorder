@@ -112,7 +112,7 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
 * **Widescreen**: off by default. Stretches the picture to 16:9 in the preview, snapshots and recordings
   (the MPEG-2 file is flagged 16:9, so players stretch it too). Use it for tapes recorded in anamorphic widescreen.
 * **Stop after**: stops the recording by itself after a time you choose (default: no limit). Pick 5 minutes up to
-  3 hours, or type your own time into the box: `45`, `90 min`, `2h`, `1:30`. It can be changed during a recording.
+  12 hours (4, 6, 8, 10 and 12 hours match VHS tape lengths), or type your own time into the box: `45`, `90 min`, `2h`, `1:30`. It can be changed during a recording.
   Linux: the "Stop:" button cycles through the choices, and `+` / `-` change the time by a minute.
 * **Preview**: on by default. Turn it off to stop drawing the picture and save CPU on slow computers; recording and
   the sound carry on. Snapshots need it on (Linux: `E`; Mac: View > Show Preview, `Cmd+E`).

@@ -1240,11 +1240,11 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
  * through libusb; the black Dazzle's comes from its Core Audio device. Either
  * way it is played via a ring buffer. */
 
-/* Pull n frames from the ring into planar float buffers, 60 ms behind the input; returns 0 if all silence. */
+/* Pull n frames from the ring into planar float buffers, 100 ms behind the input; returns 0 if all silence. */
 static volatile int g_monitor = 1; /* AudioUnit path only; AVAudioEngine mutes in its mixer */
 static int ring_render(float *L, float *R, uint32_t n, float gain)
 {
-    return monitor_ring_read(&g_ring, (uint32_t)g_audio_rate * 60 / 1000, NULL, L, R, (int)n, gain);
+    return monitor_ring_read(&g_ring, (uint32_t)g_audio_rate * 100 / 1000, NULL, L, R, (int)n, gain);
 }
 
 static OSStatus output_unit_render(void *ref, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts,
