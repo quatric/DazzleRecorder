@@ -11,13 +11,42 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NUM_BUFS 4
+#define NUM_BUFS 16 /* 20 ms each: a late callback must not lose input */
+#define OUT_RATE 48000 /* the app's audio clock; other input rates are resampled to it */
 
 struct sa_input {
     AudioQueueRef q;
     sa_input_cb cb;
     void *user;
+    double step, pos; /* resampling: input frames per output frame (0 = off), position in the input */
+    int16_t last[2];
+    int16_t *rs;
+    int rs_frames;
 };
+
+/* Linear interpolation from the device's rate to OUT_RATE. Without it a 44.1 kHz line input played
+ * at 48 kHz drains the monitor ring and stutters. */
+static int resample(sa_input_t *c, const int16_t *in, int n, int16_t *out)
+{
+    int o = 0;
+    double pos = c->pos;
+    while (n > 0 && (int)(pos < 0 ? -1 : pos) <= n - 2 && o < c->rs_frames) {
+        int i = pos < 0 ? -1 : (int)pos;
+        double f = pos - i;
+        for (int ch = 0; ch < 2; ch++) {
+            int a = i < 0 ? c->last[ch] : in[2 * i + ch], b = in[2 * (i + 1) + ch];
+            out[2 * o + ch] = (int16_t)(a + (b - a) * f);
+        }
+        o++;
+        pos += c->step;
+    }
+    c->pos = pos - n;
+    if (n > 0) {
+        c->last[0] = in[2 * (n - 1)];
+        c->last[1] = in[2 * (n - 1) + 1];
+    }
+    return o;
+}
 
 /* pass 0: model UID contains ":VVVV:PPPP"; pass 1: device name matches */
 static int cfstr_matches(CFStringRef s, int pass, const char *vidpid, const char *product)
@@ -177,8 +206,14 @@ static void input_cb(void *user, AudioQueueRef q, AudioQueueBufferRef b, const A
 {
     (void)ts, (void)npackets, (void)desc;
     sa_input_t *c = user;
-    if (b->mAudioDataByteSize)
-        c->cb((const int16_t *)b->mAudioData, (int)(b->mAudioDataByteSize / 4), c->user);
+    int n = (int)(b->mAudioDataByteSize / 4);
+    if (n && c->step) {
+        int o = resample(c, (const int16_t *)b->mAudioData, n, c->rs);
+        if (o)
+            c->cb(c->rs, o, c->user);
+    } else if (n) {
+        c->cb((const int16_t *)b->mAudioData, n, c->user);
+    }
     AudioQueueEnqueueBuffer(q, b, 0, NULL);
 }
 
@@ -207,6 +242,15 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
         return NULL;
     c->cb = cb;
     c->user = user;
+    if (sr > 1000 && (sr < OUT_RATE - 1 || sr > OUT_RATE + 1)) {
+        c->step = sr / OUT_RATE;
+        c->rs_frames = (int)(sr / 100 * 2 * OUT_RATE / sr) + 16; /* room for a 20 ms buffer */
+        c->rs = malloc((size_t)c->rs_frames * 4);
+        if (!c->rs) {
+            free(c);
+            return NULL;
+        }
+    }
 
     AudioStreamBasicDescription f = {
         .mSampleRate = sr,
@@ -227,13 +271,14 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
             CFRelease(uid);
         if (c->q)
             AudioQueueDispose(c->q, true);
+        free(c->rs);
         free(c);
         return NULL;
     }
     CFRelease(uid);
 
-    /* 10 ms buffers */
-    UInt32 bytes = (UInt32)(sr / 100) * 4;
+    /* 20 ms buffers */
+    UInt32 bytes = (UInt32)(sr / 50) * 4;
     for (int i = 0; i < NUM_BUFS; i++) {
         AudioQueueBufferRef b;
         if (AudioQueueAllocateBuffer(c->q, bytes, &b) == 0)
@@ -243,11 +288,12 @@ sa_input_t *sa_input_start(uint16_t vid, uint16_t pid, const char *product, sa_i
         sa_set_error("macOS would not start the Dazzle's sound input (allow DazzleRecorder under System Settings "
                      "> Privacy & Security > Microphone)");
         AudioQueueDispose(c->q, true);
+        free(c->rs);
         free(c);
         return NULL;
     }
     if (rate)
-        *rate = (int)sr;
+        *rate = c->step ? OUT_RATE : (int)sr;
     return c;
 }
 
@@ -257,5 +303,6 @@ void sa_input_stop(sa_input_t *c)
         return;
     AudioQueueStop(c->q, true);
     AudioQueueDispose(c->q, true);
+    free(c->rs);
     free(c);
 }
