@@ -118,7 +118,7 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
   the sound carry on. Snapshots need it on (Linux: `E`; Mac: View > Show Preview, `Cmd+E`).
 * **Deinterlace**: applies to the preview and the recording. Off records interlaced
   video (top field first) like a DVD, which is best for burning a DVD later. On
-  uses ffmpeg's yadif and suits computer playback and editing.
+  uses ffmpeg's yadif at the full field rate (59.94 or 50 fps, so motion stays smooth; DV stays at 29.97/25 as the format requires) and suits computer playback and editing.
 * **Format**: **MPEG-2** (the default) writes a DVD-compatible `.mpg`; **H.264** writes a much smaller
   `.mp4` with x264 and AAC audio, better for keeping on a computer or sharing. On Windows and Linux both
   are in the Quality list.

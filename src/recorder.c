@@ -553,11 +553,12 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     snprintf(maxk, sizeof(maxk), "%dk", r->o.video_kbps + 1000 > 9800 ? 9800 : r->o.video_kbps + 1000);
     snprintf(ak, sizeof(ak), "%dk", r->o.audio_kbps);
     snprintf(rate, sizeof(rate), "%d", r->o.audio_rate);
-    snprintf(gop, sizeof(gop), "%d", r->o.pal ? 15 : 18);
+    /* yadif send_field doubles the frame rate, so a GOP covers twice as many frames */
+    snprintf(gop, sizeof(gop), "%d", (r->o.pal ? 15 : 18) * (r->o.deinterlace ? 2 : 1));
 
     char crf[16], keyint[16];
     snprintf(crf, sizeof(crf), "%d", r->o.crf > 0 ? r->o.crf : 20);
-    snprintf(keyint, sizeof(keyint), "%d", r->o.pal ? 50 : 60);
+    snprintf(keyint, sizeof(keyint), "%d", (r->o.pal ? 50 : 60) * (r->o.deinterlace ? 2 : 1));
     const char *aspect = r->o.widescreen ? "16:9" : "4:3";
 
     const char *argv[80];
@@ -581,7 +582,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     switch (r->o.codec) {
     case REC_H264:
         if (r->o.deinterlace) {
-            A("-vf"); A("yadif=mode=send_frame:parity=tff,format=yuv420p");
+            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv420p"); /* 59.94/50 fps */
         } else {
             /* interlaced H.264 (MBAFF, top field first), as broadcast and camcorders do it */
             A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
@@ -610,7 +611,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
         break;
     default:
         if (r->o.deinterlace) {
-            A("-vf"); A("yadif=mode=send_frame:parity=tff,format=yuv420p");
+            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv420p"); /* 59.94/50 fps */
         } else {
             /* field-aware 4:2:2 -> 4:2:0 so chroma doesn't mix the two fields */
             A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
