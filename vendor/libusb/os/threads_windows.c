@@ -21,20 +21,45 @@
 
 #include "libusbi.h"
 
+void usbi_cond_init(usbi_cond_t *cond)
+{
+	cond->waiters = 0;
+	cond->sem = CreateSemaphoreW(NULL, 0, 0x7fffffff, NULL);
+	assert(cond->sem != NULL);
+}
+
+void usbi_cond_destroy(usbi_cond_t *cond)
+{
+	CloseHandle(cond->sem);
+}
+
+void usbi_cond_broadcast(usbi_cond_t *cond)
+{
+	LONG n = InterlockedExchange(&cond->waiters, 0);
+
+	if (n > 0)
+		ReleaseSemaphore(cond->sem, n, NULL);
+}
+
 int usbi_cond_timedwait(usbi_cond_t *cond,
 	usbi_mutex_t *mutex, const struct timeval *tv)
 {
-	DWORD millis;
+	DWORD millis, r;
 
 	millis = (DWORD)(tv->tv_sec * 1000L) + (tv->tv_usec / 1000L);
 	/* round up to next millisecond */
 	if (tv->tv_usec % 1000L)
 		millis++;
 
-	if (SleepConditionVariableCS(cond, mutex, millis))
+	InterlockedIncrement(&cond->waiters);
+	LeaveCriticalSection(mutex);
+	r = WaitForSingleObject(cond->sem, millis);
+	EnterCriticalSection(mutex);
+
+	if (r == WAIT_OBJECT_0)
 		return 0;
-	else if (GetLastError() == ERROR_TIMEOUT)
-		return LIBUSB_ERROR_TIMEOUT;
-	else
-		return LIBUSB_ERROR_OTHER;
+	/* timed out: unregister, unless a broadcast already counted us */
+	if (InterlockedDecrement(&cond->waiters) < 0)
+		InterlockedIncrement(&cond->waiters);
+	return r == WAIT_TIMEOUT ? LIBUSB_ERROR_TIMEOUT : LIBUSB_ERROR_OTHER;
 }

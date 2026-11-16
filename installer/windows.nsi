@@ -2,7 +2,7 @@
 ;   makensis -DARCH=x86_64|x86|aarch64 -DVERSION=0.4.0 -DSRC=dist\x86_64-windows-gnu \
 ;            -DOUTFILE=DazzleRecorder-x86_64-windows-setup.exe installer/windows.nsi
 ; The driver is installed by dazzle-driver.exe (src/driver_win32.c): WinUSB on
-; Windows 8.1 and later, libusbK on Windows 7 and 8.0, on the video interface only.
+; Windows 8.1 and later, libusbK on Windows XP, 7 and 8.0, on the video interface only.
 
 Unicode true
 !include "MUI2.nsh"
@@ -106,7 +106,7 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "DazzleRecorder, the dvc100-capture command line tool and ffmpeg for recording."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecDriver} "Lets DazzleRecorder use the Dazzle: WinUSB (Windows 8.1 and later) or libusbK (Windows 7) for its video interface, as Zadig would. Its sound keeps using Windows' own driver."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDriver} "Lets DazzleRecorder use the Dazzle: WinUSB (Windows 8.1 and later) or libusbK (Windows XP to 8.0) for its video interface, as Zadig would. Its sound keeps using Windows' own driver."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut to DazzleRecorder on the desktop."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 

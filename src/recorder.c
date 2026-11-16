@@ -515,9 +515,16 @@ static void *audio_writer(void *arg)
     return NULL;
 }
 
+const rec_h264_level_t rec_h264_levels[REC_H264_LEVELS] = {
+    { "Standard (CRF 23)", 23, 0 }, { "High (CRF 20)", 20, 0 }, { "Maximum (CRF 17)", 17, 0 },
+    { "2 Mbit/s", 0, 2000 },        { "4 Mbit/s", 0, 4000 },    { "6 Mbit/s", 0, 6000 },
+    { "8 Mbit/s", 0, 8000 },        { "10 Mbit/s", 0, 10000 },  { "15 Mbit/s", 0, 15000 },
+    { "20 Mbit/s", 0, 20000 },      { "30 Mbit/s", 0, 30000 },
+};
+
 const char *rec_extension(rec_codec_t codec)
 {
-    return codec == REC_H264 ? "mp4" : codec == REC_DV ? "mov" : "mpg";
+    return codec == REC_H264 ? "mp4" : codec == REC_DV ? "mov" : codec == REC_LOSSLESS ? "mkv" : "mpg";
 }
 
 recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, int errlen)
@@ -556,7 +563,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     /* yadif send_field doubles the frame rate, so a GOP covers twice as many frames */
     snprintf(gop, sizeof(gop), "%d", (r->o.pal ? 15 : 18) * (r->o.deinterlace ? 2 : 1));
 
-    char crf[16], keyint[16];
+    char crf[16], keyint[16], h264k[16], h264max[16], h264buf[16];
     snprintf(crf, sizeof(crf), "%d", r->o.crf > 0 ? r->o.crf : 20);
     snprintf(keyint, sizeof(keyint), "%d", (r->o.pal ? 50 : 60) * (r->o.deinterlace ? 2 : 1));
     const char *aspect = r->o.widescreen ? "16:9" : "4:3";
@@ -588,12 +595,35 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
             A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
             A("-flags"); A("+ilme+ildct");
         }
-        A("-c:v"); A("libx264"); A("-preset"); A("veryfast"); A("-crf"); A(crf);
+        A("-c:v"); A("libx264"); A("-preset"); A("veryfast");
+        if (r->o.h264_kbps > 0) {
+            /* a target bitrate: average it, with a peak of twice that and a two-second buffer */
+            snprintf(h264k, sizeof(h264k), "%dk", r->o.h264_kbps);
+            snprintf(h264max, sizeof(h264max), "%dk", r->o.h264_kbps * 2);
+            snprintf(h264buf, sizeof(h264buf), "%dk", r->o.h264_kbps * 2);
+            A("-b:v"); A(h264k); A("-maxrate"); A(h264max); A("-bufsize"); A(h264buf);
+        } else {
+            A("-crf"); A(crf);
+        }
         A("-g"); A(keyint); A("-aspect"); A(aspect);
         A("-c:a"); A("aac"); A("-b:a"); A("192k");
         /* fragmented, so a recording cut short (crash, full disk, unplugged) still plays */
         A("-movflags"); A("+frag_keyframe+empty_moov+default_base_moof");
         A("-f"); A("mp4"); A(path);
+        break;
+    case REC_LOSSLESS:
+        /* FFV1 keeps the capture's 4:2:2 exactly. Interlaced it stays as it came (top field first);
+         * deinterlaced (yadif at the field rate) it is no longer a copy of the tape, but still lossless. */
+        if (r->o.deinterlace) {
+            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv422p");
+        } else {
+            A("-vf"); A("setfield=tff,format=yuv422p");
+            A("-flags"); A("+ilme+ildct");
+        }
+        A("-c:v"); A("ffv1"); A("-level"); A("3"); A("-coder"); A("1"); A("-context"); A("0");
+        A("-slices"); A("4"); A("-slicecrc"); A("1"); A("-g"); A("1"); A("-aspect"); A(aspect);
+        A("-c:a"); A("pcm_s16le");
+        A("-f"); A("matroska"); A(path);
         break;
     case REC_DV:
         if (r->o.deinterlace) {

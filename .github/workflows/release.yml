@@ -70,7 +70,7 @@ jobs:
     env:
       LLVM_MINGW: llvm-mingw-20261104-msvcrt-ubuntu-22.04-x86_64
       LLVM_MINGW_SHA256: 6e3342e2e0dfa56e9178f3c34b198f278bd5e603db4a759455d1439cc2230630
-      # msvcrt-based toolchain, so the x86/x86_64 builds start on Windows 7
+      # msvcrt-based toolchain, so the x86/x86_64 builds start on Windows XP and 7
       WIN_CC_x86_64: x86_64-w64-mingw32-clang
       WIN_CC_x86: i686-w64-mingw32-clang
       WIN_CC_aarch64: aarch64-w64-mingw32-clang
@@ -88,13 +88,21 @@ jobs:
           echo "$RUNNER_TEMP/$LLVM_MINGW/bin" >> "$GITHUB_PATH"
       - run: echo "LIBUSBK_DIR=$PWD/$(scripts/fetch-libusbk.sh)" >> "$GITHUB_ENV"
       - run: scripts/build-all.sh x86_64-windows-gnu x86-windows-gnu aarch64-windows-gnu
-      - name: Check Windows 7 compatibility (no Universal CRT)
+      - name: Check Windows XP and 7 compatibility (no Universal CRT, no Vista-only imports)
         run: |
+          # Windows APIs that Windows XP lacks (the x86 and x86_64 builds load from XP on)
+          vista='InitializeConditionVariable|SleepConditionVariableCS|SleepConditionVariableSRW|WakeConditionVariable|WakeAllConditionVariable|AcquireSRWLockExclusive|AcquireSRWLockShared|ReleaseSRWLockExclusive|ReleaseSRWLockShared|InitializeSRWLock|TryAcquireSRWLockExclusive|TryAcquireSRWLockShared|GetTickCount64|InitOnceExecuteOnce|InitOnceBeginInitialize|InitOnceComplete|CancelIoEx|CancelSynchronousIo|CreateSymbolicLinkW|CreateSymbolicLinkA|GetLogicalProcessorInformationEx|GetSystemTimePreciseAsFileTime|WaitOnAddress|GetFinalPathNameByHandleW|GetFinalPathNameByHandleA|CreateEventExW|CreateWaitableTimerExW|CreateMutexExW|CreateSemaphoreExW|InitializeCriticalSectionEx|SetFileInformationByHandle|GetFileInformationByHandleEx|GetLocaleInfoEx|LCMapStringEx|CompareStringEx|GetUserDefaultLocaleName|EnumSystemLocalesEx|SetThreadDescription|QueryThreadCycleTime|GetProductInfo|RegGetValueW|RegGetValueA|SetProcessDPIAware|SHGetKnownFolderPath|SHCreateItemFromParsingName|DwmIsCompositionEnabled|DwmExtendFrameIntoClientArea|BCryptGenRandom|ConvertThreadToFiberEx|GetCurrentProcessorNumberEx|PowerCreateRequest|InitializeProcThreadAttributeList|CreatePipeEx'
           bad=0
           for f in dist/x86_64-windows-gnu/*.exe dist/x86-windows-gnu/*.exe; do
-            dlls=$(llvm-objdump -p "$f" | sed -n 's/.*DLL Name: //p' | sort -u | tr '\n' ' ')
+            dump=$(llvm-objdump -p "$f")
+            dlls=$(printf '%s\n' "$dump" | sed -n 's/.*DLL Name: //p' | sort -u | tr '\n' ' ')
             echo "$f: $dlls"
             case $dlls in *api-ms-win-crt*|*ucrtbase*) echo "::error::$f needs the Universal CRT"; bad=1 ;; esac
+            # the PE header must ask for Windows XP (5.1; XP x64 5.2) at most
+            ver=$(printf '%s\n' "$dump" | sed -n 's/^MajorOSystemVersion[[:space:]]*//p;s/^MajorSubsystemVersion[[:space:]]*//p' | sort -nr | head -1)
+            [ "${ver:-0}" -le 5 ] || { echo "::error::$f wants Windows $ver or later"; bad=1; }
+            hits=$(printf '%s\n' "$dump" | grep -Ew "$vista" | sed 's/^[[:space:]]*//' | sort -u | tr '\n' ';') || true
+            [ -z "$hits" ] || { echo "::error::$f imports APIs Windows XP lacks: $hits"; bad=1; }
           done
           exit $bad
       - name: Package

@@ -316,8 +316,22 @@ static void choose_folder(void)
     static const GUID iid = { 0xd57c7288, 0xd4ad, 0x4768, { 0xbe, 0x02, 0x9d, 0x96, 0x95, 0x32, 0xd9, 0x60 } };
     static const GUID iid_item = { 0x43826d1e, 0xe718, 0x42ee, { 0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe } };
     IFileOpenDialog *dlg = NULL;
-    if (FAILED(CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER, &iid, (void **)&dlg)))
+    if (FAILED(CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER, &iid, (void **)&dlg))) {
+        /* Windows XP has no IFileOpenDialog: the classic folder browser instead */
+        wchar_t path[MAX_PATH] = L"";
+        BROWSEINFOW bi = { .hwndOwner = G.wnd, .lpszTitle = L"Choose the recording folder",
+                           .ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE };
+        PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
+        if (pidl) {
+            if (SHGetPathFromIDListW(pidl, path)) {
+                w_to_utf8(path, G.folder, sizeof(G.folder));
+                app_set_setting_str("folder", G.folder);
+                update_folder_button();
+            }
+            CoTaskMemFree(pidl);
+        }
         return;
+    }
     DWORD opts = 0;
     IFileOpenDialog_GetOptions(dlg, &opts);
     IFileOpenDialog_SetOptions(dlg, opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
@@ -675,7 +689,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 {
     (void)prev, (void)cmdline;
     G.inst = inst;
-    SetProcessDPIAware();
+    {   /* Vista and later; Windows XP has no such call */
+        typedef BOOL (WINAPI *dpi_t)(void);
+        dpi_t aware = (dpi_t)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDPIAware");
+        if (aware)
+            aware();
+    }
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     HDC sdc = GetDC(NULL);
     G.dpi = GetDeviceCaps(sdc, LOGPIXELSY);

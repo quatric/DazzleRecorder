@@ -333,13 +333,14 @@ static void rec_done(void *user, int ok, const char *path);
     if (codec == REC_DV) {
         [_quality addItemWithTitle:@"25 Mbit/s (DV)"];
     } else if (codec == REC_H264) {
-        [_quality addItemsWithTitles:[NSArray arrayWithObjects:@"Standard (CRF 23)", @"High (CRF 20)",
-                                                               @"Maximum (CRF 17)", nil]];
+        for (int i = 0; i < REC_H264_LEVELS; i++)
+            [_quality addItemWithTitle:[NSString stringWithUTF8String:rec_h264_levels[i].name]];
     } else {
         [_quality addItemsWithTitles:[NSArray arrayWithObjects:@"Standard (6 Mbit/s)", @"High (8 Mbit/s)",
                                                                @"Maximum (9.5 Mbit/s)", nil]];
     }
-    [_quality selectItemAtIndex:codec == REC_DV ? 0 : q < 0 ? 0 : q > 2 ? 2 : q];
+    int qmax = codec == REC_H264 ? REC_H264_LEVELS - 1 : 2;
+    [_quality selectItemAtIndex:codec == REC_DV ? 0 : q < 0 ? 0 : q > qmax ? qmax : q];
     [_quality setEnabled:codec != REC_DV && !app_is_recording(g_app)];
 }
 

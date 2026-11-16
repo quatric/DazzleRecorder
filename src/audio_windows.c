@@ -1,7 +1,8 @@
 /*
  * Windows audio. The capture box's USB Audio Class interfaces are bound to
  * usbaudio.sys (only the video interface is switched to WinUSB), so its
- * sound is a WASAPI capture endpoint. Monitoring plays through waveOut.
+ * sound is a WASAPI capture endpoint (waveIn on Windows XP, which has no WASAPI). Monitoring plays through
+ * waveOut.
  */
 #define COBJMACROS
 #include "sysaudio.h"
@@ -34,7 +35,8 @@ static const PROPERTYKEY k_PKEY_Device_FriendlyName = {
     { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14
 };
 
-const char *sa_backend_name(void) { return "WASAPI"; }
+static int g_waveio; /* 1 once capture fell back to waveIn (Windows XP) */
+const char *sa_backend_name(void) { return g_waveio ? "waveIn" : "WASAPI"; }
 
 static void to_utf8(const wchar_t *w, char *out, int len)
 {
@@ -239,6 +241,81 @@ static void fail_audio(HRESULT hr)
         sa_set_error("Windows would not open the Dazzle's sound input (error 0x%08lx)", (unsigned long)hr);
 }
 
+/* ---- Windows XP: no WASAPI, so capture through waveIn ---- */
+
+#define WIN_BUFS 8
+#define WIN_FRAMES 960 /* 20 ms at 48 kHz */
+
+static int wavein_pick(int line, const char *product)
+{
+    UINT n = waveInGetNumDevs();
+    int usb = -1;
+    for (UINT i = 0; i < n; i++) {
+        WAVEINCAPSA caps;
+        if (waveInGetDevCapsA(i, &caps, sizeof(caps)) != MMSYSERR_NOERROR)
+            continue;
+        if (line ? sa_line_name_matches(caps.szPname)
+                 : ((product && *product && sa_name_matches(caps.szPname, product)) || sa_box_name(caps.szPname)))
+            return (int)i;
+        if (!line && usb < 0 && upper_contains(caps.szPname, "USB AUDIO"))
+            usb = (int)i;
+    }
+    return line ? (n ? (int)WAVE_MAPPER : -2) : usb >= 0 ? usb : -2;
+}
+
+static void wavein_capture(sa_input_t *in, int line)
+{
+    g_waveio = 1;
+    int dev = wavein_pick(line, in->product);
+    if (dev == -2) {
+        sa_set_error(line ? "Windows has no Line In sound input (check Sound and Audio Devices > Audio)"
+                          : "Windows has no sound input for the Dazzle (check Sound and Audio Devices > Audio)");
+        SetEvent(in->ready);
+        return;
+    }
+    WAVEFORMATEX wf = { WAVE_FORMAT_PCM, 2, 48000, 48000 * 4, 4, 16, 0 };
+    HANDLE ev = CreateEventW(NULL, FALSE, FALSE, NULL);
+    HWAVEIN wi = NULL;
+    MMRESULT mr = ev ? waveInOpen(&wi, (UINT)dev, &wf, (DWORD_PTR)ev, 0, CALLBACK_EVENT) : MMSYSERR_NOMEM;
+    if (mr != MMSYSERR_NOERROR) {
+        sa_set_error("Windows would not open the Dazzle's sound input (waveIn error %u)", (unsigned)mr);
+        if (ev)
+            CloseHandle(ev);
+        SetEvent(in->ready);
+        return;
+    }
+    static int16_t bufs[WIN_BUFS][WIN_FRAMES * 2];
+    WAVEHDR hdr[WIN_BUFS];
+    memset(hdr, 0, sizeof(hdr));
+    for (int i = 0; i < WIN_BUFS; i++) {
+        hdr[i].lpData = (LPSTR)bufs[i];
+        hdr[i].dwBufferLength = sizeof(bufs[i]);
+        waveInPrepareHeader(wi, &hdr[i], sizeof(WAVEHDR));
+        waveInAddBuffer(wi, &hdr[i], sizeof(WAVEHDR));
+    }
+    in->rate = 48000;
+    in->ok = 1;
+    waveInStart(wi);
+    SetEvent(in->ready);
+    while (!in->quit) {
+        WaitForSingleObject(ev, 50);
+        for (int i = 0; i < WIN_BUFS; i++) {
+            if (!(hdr[i].dwFlags & WHDR_DONE))
+                continue;
+            if (hdr[i].dwBytesRecorded)
+                in->cb((const int16_t *)(const void *)hdr[i].lpData, (int)(hdr[i].dwBytesRecorded / 4), in->user);
+            hdr[i].dwFlags &= ~WHDR_DONE;
+            hdr[i].dwBytesRecorded = 0;
+            waveInAddBuffer(wi, &hdr[i], sizeof(WAVEHDR));
+        }
+    }
+    waveInReset(wi);
+    for (int i = 0; i < WIN_BUFS; i++)
+        waveInUnprepareHeader(wi, &hdr[i], sizeof(WAVEHDR));
+    waveInClose(wi);
+    CloseHandle(ev);
+}
+
 static void *capture_thread(void *arg)
 {
     sa_input_t *in = arg;
@@ -255,6 +332,11 @@ static void *capture_thread(void *arg)
     HRESULT hr = CoCreateInstance(&k_CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &k_IID_IMMDeviceEnumerator,
                                   (void **)&en);
     int line = sa_line_in();
+    if (FAILED(hr)) {
+        /* no MMDevice API: Windows XP */
+        wavein_capture(in, line);
+        goto out;
+    }
     if (SUCCEEDED(hr) &&
         !(dev = line ? find_line_endpoint(en) : find_endpoint(en, in->vid, in->pid, in->product))) {
         sa_set_error(line ? "Windows has no Line In sound input (check Sound settings > Recording)"

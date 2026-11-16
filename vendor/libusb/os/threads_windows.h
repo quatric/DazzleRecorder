@@ -67,25 +67,24 @@ struct timespec {
 };
 #endif /* HAVE_STRUCT_TIMESPEC || _TIMESPEC_DEFINED */
 
-typedef CONDITION_VARIABLE usbi_cond_t;
-static inline void usbi_cond_init(usbi_cond_t *cond)
-{
-	InitializeConditionVariable(cond);
-}
-static inline void usbi_cond_wait(usbi_cond_t *cond, usbi_mutex_t *mutex)
-{
-	WINAPI_CHECK(SleepConditionVariableCS(cond, mutex, INFINITE));
-}
+/* Condition variables for Windows XP, which has no CONDITION_VARIABLE (Vista and later): a counting semaphore
+ * plus a count of waiters. A waiter registers while it still holds the mutex, so a broadcast made under the
+ * mutex never misses it; a waiter that times out can leave a stray release behind, which only costs another
+ * waiter a spurious wakeup (which condition variables allow, and libusb tolerates). */
+typedef struct {
+	LONG waiters;
+	HANDLE sem;
+} usbi_cond_t;
+void usbi_cond_init(usbi_cond_t *cond);
 int usbi_cond_timedwait(usbi_cond_t *cond,
 	usbi_mutex_t *mutex, const struct timeval *tv);
-static inline void usbi_cond_broadcast(usbi_cond_t *cond)
+static inline void usbi_cond_wait(usbi_cond_t *cond, usbi_mutex_t *mutex)
 {
-	WakeAllConditionVariable(cond);
+	struct timeval forever = { 0x7fffffffL / 1000L, 0 };
+	(void)usbi_cond_timedwait(cond, mutex, &forever);
 }
-static inline void usbi_cond_destroy(usbi_cond_t *cond)
-{
-	UNUSED(cond);
-}
+void usbi_cond_broadcast(usbi_cond_t *cond);
+void usbi_cond_destroy(usbi_cond_t *cond);
 
 typedef DWORD usbi_tls_key_t;
 static inline void usbi_tls_key_create(usbi_tls_key_t *key)

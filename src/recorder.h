@@ -14,9 +14,15 @@ typedef enum {
     REC_MPEG2 = 0, /* DVD-compatible MPEG-2 + MP2 program stream (.mpg) */
     REC_H264,      /* x264 H.264 + AAC in MP4 (.mp4); needs an ffmpeg with libx264 */
     REC_DV,        /* DV (25 Mbit/s, intra-frame, cheap to encode) + PCM in QuickTime (.mov), for PowerPC Macs */
+    REC_LOSSLESS,  /* FFV1 + PCM in Matroska (.mkv): every pixel of the 4:2:2 capture kept exactly, about 80-100 Mbit/s */
 } rec_codec_t;
 
-/* "mpg", "mp4" or "mov" */
+/* The H.264 quality steps the GUIs list: x264 constant quality (crf), or an average bitrate when crf is 0. */
+#define REC_H264_LEVELS 11
+typedef struct { const char *name; int crf, kbps; } rec_h264_level_t;
+extern const rec_h264_level_t rec_h264_levels[REC_H264_LEVELS];
+
+/* "mpg", "mp4", "mov" or "mkv" */
 const char *rec_extension(rec_codec_t codec);
 
 typedef struct {
@@ -26,7 +32,8 @@ typedef struct {
     int deinterlace;       /* 1 = yadif, encode progressive; 0 = keep interlaced */
     int widescreen;        /* 1 = flag the picture as 16:9 instead of 4:3 */
     int video_kbps;        /* MPEG-2: 0 = 8000 */
-    int crf;               /* H.264: x264 constant quality, 0 = 20 */
+    int crf;               /* H.264: x264 constant quality, 0 = 20 (ignored when h264_kbps is set) */
+    int h264_kbps;         /* H.264: average video bitrate in kbit/s instead of constant quality, 0 = use crf */
     int audio_kbps;        /* 0 = 224 */
     int audio_rate;        /* 0 = 48000 */
 } recorder_opts_t;

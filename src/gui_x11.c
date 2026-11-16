@@ -146,7 +146,9 @@ static struct {
 
 /* MPEG-2 bitrates, then H.264 (x264) quality levels; see app_quality_names */
 static const char *const QUALITY_NAME[APP_QUALITIES] = { "MPEG-2 6M", "MPEG-2 8M", "MPEG-2 9.5M",
-                                                         "H.264 CRF 23", "H.264 CRF 20", "H.264 CRF 17" };
+                                                         "H.264 CRF 23", "H.264 CRF 20", "H.264 CRF 17",
+                                                         "H.264 2M", "H.264 4M", "H.264 6M", "H.264 8M", "H.264 10M",
+                                                         "H.264 15M", "H.264 20M", "H.264 30M", "Lossless" };
 
 static void set_status(const char *s)
 {

@@ -116,7 +116,8 @@ static int record_encoded(dvc100_t *dev, rec_codec_t codec, const char *path, in
 {
     int rate = 48000;
     recorder_opts_t o = { .codec = codec, .width = w, .height = h, .pal = pal, .deinterlace = deinterlace,
-                          .widescreen = widescreen, .video_kbps = kbps, .crf = crf, .audio_rate = rate };
+                          .widescreen = widescreen, .video_kbps = kbps, .crf = crf, .audio_rate = rate,
+                          .h264_kbps = codec == REC_H264 ? kbps : 0 };
     char err[256];
     recorder_t *rec = rec_open(path, &o, err, sizeof(err));
     if (!rec) {
@@ -135,7 +136,7 @@ static int record_encoded(dvc100_t *dev, rec_codec_t codec, const char *path, in
     }
     fprintf(stderr, "dvc100-capture: recording %s %s to %s, Ctrl-C to stop\n",
             deinterlace ? "deinterlaced" : "interlaced",
-            codec == REC_H264 ? "H.264" : codec == REC_DV ? "DV" : "MPEG-2", path);
+            codec == REC_H264 ? "H.264" : codec == REC_DV ? "DV" : codec == REC_LOSSLESS ? "lossless FFV1" : "MPEG-2", path);
     double limit = count > 0 ? count / (pal ? 25.0 : 30000.0 / 1001) : 0;
     while (!g_stop && (limit <= 0 || rec_seconds(rec) < limit))
         usleep(100000);
@@ -160,9 +161,10 @@ static void usage(const char *argv0)
             "  -m, --mpeg2 FILE.mpg           record video+audio as DVD-compatible MPEG-2\n"
             "  -x, --h264 FILE.mp4            record video+audio as H.264 (x264) + AAC instead\n"
             "      --dv FILE.mov              record video+audio as DV + PCM instead (light on old CPUs)\n"
+            "      --lossless FILE.mkv        record video+audio losslessly (FFV1 + PCM, about 90 Mbit/s)\n"
             "  -d, --deinterlace              deinterlace the recording (default: interlaced)\n"
             "  -w, --widescreen               flag the recording 16:9 (default: 4:3)\n"
-            "  -b, --bitrate KBPS             MPEG-2 video bitrate (default 8000)\n"
+            "  -b, --bitrate KBPS             MPEG-2 video bitrate (default 8000), or H.264 average bitrate instead of -q\n"
             "  -q, --crf N                    H.264 constant quality, lower is better (default 20)\n"
             "  -a, --audio FILE.wav           also record the audio input (48 kHz stereo)\n"
             "      --audio-only               record audio only (with -a), until Ctrl-C or -t\n"
@@ -186,7 +188,7 @@ int main(int argc, char **argv)
     double seconds = 0;
     int picture[4] = { -1, -1, -1, -1 };
 
-    enum { OPT_AUDIO_ONLY = 999, OPT_INFO = 1000, OPT_BRI, OPT_CON, OPT_SAT, OPT_HUE, OPT_DV };
+    enum { OPT_AUDIO_ONLY = 999, OPT_INFO = 1000, OPT_BRI, OPT_CON, OPT_SAT, OPT_HUE, OPT_DV, OPT_LOSSLESS };
     static const struct option opts[] = {
         { "input", required_argument, NULL, 'i' },
         { "norm", required_argument, NULL, 'n' },
@@ -197,6 +199,7 @@ int main(int argc, char **argv)
         { "mpeg2", required_argument, NULL, 'm' },
         { "h264", required_argument, NULL, 'x' },
         { "dv", required_argument, NULL, OPT_DV },
+        { "lossless", required_argument, NULL, OPT_LOSSLESS },
         { "crf", required_argument, NULL, 'q' },
         { "deinterlace", no_argument, NULL, 'd' },
         { "widescreen", no_argument, NULL, 'w' },
@@ -242,6 +245,7 @@ int main(int argc, char **argv)
         case 'm': mpegpath = optarg; codec = REC_MPEG2; break;
         case 'x': mpegpath = optarg; codec = REC_H264; break;
         case OPT_DV: mpegpath = optarg; codec = REC_DV; break;
+        case OPT_LOSSLESS: mpegpath = optarg; codec = REC_LOSSLESS; break;
         case 'q': crf = atoi(optarg); break;
         case 'd': deinterlace = 1; break;
         case 'w': widescreen = 1; break;

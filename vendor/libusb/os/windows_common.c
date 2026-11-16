@@ -841,13 +841,22 @@ static int windows_cancel_transfer(struct usbi_transfer *itransfer)
 	struct windows_context_priv *priv = usbi_get_context_priv(ITRANSFER_CTX(itransfer));
 	struct windows_transfer_priv *transfer_priv = usbi_get_transfer_priv(itransfer);
 
-	// Try CancelIoEx() on the transfer
+	// Try CancelIoEx() on the transfer (Vista and later: Windows XP lacks it, so it is looked up here)
 	// If that fails, fall back to the backend's cancel_transfer()
 	// function if it is available
-	if (CancelIoEx(transfer_priv->handle, &transfer_priv->overlapped))
-		return LIBUSB_SUCCESS;
-	else if (GetLastError() == ERROR_NOT_FOUND)
-		return LIBUSB_ERROR_NOT_FOUND;
+	typedef BOOL (WINAPI *cancel_io_ex_t)(HANDLE, LPOVERLAPPED);
+	static cancel_io_ex_t cancel_io_ex;
+	static int cancel_io_ex_looked_up;
+	if (!cancel_io_ex_looked_up) {
+		cancel_io_ex = (cancel_io_ex_t)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CancelIoEx");
+		cancel_io_ex_looked_up = 1;
+	}
+	if (cancel_io_ex) {
+		if (cancel_io_ex(transfer_priv->handle, &transfer_priv->overlapped))
+			return LIBUSB_SUCCESS;
+		else if (GetLastError() == ERROR_NOT_FOUND)
+			return LIBUSB_ERROR_NOT_FOUND;
+	}
 
 	if (priv->backend->cancel_transfer)
 		return priv->backend->cancel_transfer(itransfer);

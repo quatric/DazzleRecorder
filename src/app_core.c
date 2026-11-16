@@ -269,7 +269,7 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
 #ifdef _WIN32
         if (r == DVC100_ERR_NO_DRIVER)
             snprintf(err, (size_t)errlen,
-                     "%s.\n\nThe Dazzle driver (WinUSB, or libusbK on Windows 7) needs to be installed for it. "
+                     "%s.\n\nThe Dazzle driver (WinUSB, or libusbK on Windows XP to 8.0) needs to be installed for it. "
                      "This takes a few seconds and needs administrator rights.",
                      dvc100_strerror(r));
         else
@@ -382,9 +382,19 @@ void app_default_folder(char *out, int len)
     static const GUID videos = { 0x18989b1d, 0x99b5, 0x455b, { 0x84, 0x1c, 0xab, 0x7c, 0x74, 0xe4, 0xdd, 0xfc } };
     PWSTR w = NULL;
     out[0] = 0;
-    if (SUCCEEDED(SHGetKnownFolderPath(&videos, 0, NULL, &w)))
-        WideCharToMultiByte(CP_UTF8, 0, w, -1, out, len, NULL, NULL);
-    CoTaskMemFree(w);
+    /* SHGetKnownFolderPath is Vista and later; Windows XP has SHGetFolderPath */
+    typedef HRESULT (WINAPI *known_t)(const GUID *, DWORD, HANDLE, PWSTR *);
+    HMODULE sh = LoadLibraryW(L"shell32.dll");
+    known_t known = sh ? (known_t)(void *)GetProcAddress(sh, "SHGetKnownFolderPath") : NULL;
+    if (known) {
+        if (SUCCEEDED(known(&videos, 0, NULL, &w)))
+            WideCharToMultiByte(CP_UTF8, 0, w, -1, out, len, NULL, NULL);
+        CoTaskMemFree(w);
+    } else {
+        wchar_t xp[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_MYVIDEO, NULL, 0, xp)))
+            WideCharToMultiByte(CP_UTF8, 0, xp, -1, out, len, NULL, NULL);
+    }
     if (!out[0]) {
         const char *p = getenv("USERPROFILE");
         snprintf(out, (size_t)len, "%s", p ? p : ".");
@@ -525,26 +535,32 @@ void app_set_setting_int(const char *key, int v)
 const char *const app_quality_names[APP_QUALITIES] = {
     "MPEG-2 Standard (6 Mbit/s)", "MPEG-2 High (8 Mbit/s)", "MPEG-2 Maximum (9.5 Mbit/s)",
     "H.264 Standard (CRF 23)",    "H.264 High (CRF 20)",    "H.264 Maximum (CRF 17)",
+    "H.264 2 Mbit/s", "H.264 4 Mbit/s", "H.264 6 Mbit/s", "H.264 8 Mbit/s", "H.264 10 Mbit/s",
+    "H.264 15 Mbit/s", "H.264 20 Mbit/s", "H.264 30 Mbit/s",
+    "Lossless (FFV1, about 90 Mbit/s)",
 };
 
 int app_record_start(app_t *a, const char *folder, int quality, int deinterlace, char *path, int pathlen,
                      char *err, int errlen)
 {
     quality = quality < 0 ? 0 : quality >= APP_QUALITIES ? APP_QUALITIES - 1 : quality;
-    return app_record_start_codec(a, folder, quality >= 3 ? REC_H264 : REC_MPEG2, quality % 3, deinterlace, path,
-                                  pathlen, err, errlen);
+    int codec = quality == 14 ? REC_LOSSLESS : quality >= 3 ? REC_H264 : REC_MPEG2;
+    return app_record_start_codec(a, folder, codec, quality >= 3 && quality < 14 ? quality - 3 : quality % 3,
+                                  deinterlace, path, pathlen, err, errlen);
 }
 
 int app_record_start_codec(app_t *a, const char *folder, int codec, int level, int deinterlace, char *path,
                            int pathlen, char *err, int errlen)
 {
-    static const int kbps[] = { 6000, 8000, 9500 }, crf[] = { 23, 20, 17 };
+    static const int kbps[] = { 6000, 8000, 9500 };
     int quality = level < 0 ? 0 : level > 2 ? 2 : level;
+    int h = level < 0 ? 0 : level >= REC_H264_LEVELS ? REC_H264_LEVELS - 1 : level;
     make_dir(folder);
     app_timestamped_path(folder, rec_extension(codec), path, pathlen);
     recorder_opts_t o = {
         .codec = (rec_codec_t)codec,
-        .crf = crf[quality],
+        .crf = rec_h264_levels[h].crf,
+        .h264_kbps = rec_h264_levels[h].kbps,
         .width = a->w,
         .height = a->h,
         .pal = a->pal,

@@ -2,7 +2,7 @@
 # Builds the small, static ffmpeg that is bundled with DazzleRecorder.
 # It holds only what the recorder uses (src/recorder.c): y4m video and 16-bit
 # audio in through pipes, yadif/setfield/fieldorder/scale, MPEG-2 + MP2 in a
-# DVD program stream, H.264 (x264) + AAC in MP4, and DV + PCM in QuickTime.
+# DVD program stream, H.264 (x264) + AAC in MP4, and DV + PCM in QuickTime, and lossless FFV1 + PCM in Matroska.
 # With x264 linked in, this ffmpeg is GPL (version 2 or later); X264=0 leaves
 # x264 out and keeps it LGPL.
 #
@@ -44,8 +44,8 @@ FEATURES="--disable-everything --disable-autodetect --disable-doc --disable-debu
   --enable-protocol=file,pipe
   --enable-demuxer=yuv4mpegpipe,pcm_s16le,pcm_s16be
   --enable-decoder=rawvideo,pcm_s16le,pcm_s16be
-  --enable-encoder=mpeg2video,mp2,aac,dvvideo,pcm_s16be
-  --enable-muxer=mpeg2dvd,mp4,mov
+  --enable-encoder=mpeg2video,mp2,aac,dvvideo,ffv1,pcm_s16be,pcm_s16le
+  --enable-muxer=mpeg2dvd,mp4,mov,matroska
   --enable-filter=yadif,setfield,fieldorder,scale,format,null,anull,aformat,aresample"
 
 # x264 for each target: X264_HOST is its --host, X264_ENV its compiler settings
@@ -94,11 +94,17 @@ legacy-*)
   case $arch in x86) tp=i686 ;; *) tp=$arch ;; esac
   eval prefix=\${WIN_PREFIX_$arch:-$tp-w64-mingw32}
   cc=gcc; command -v "$prefix-clang" >/dev/null 2>&1 && cc=clang
+  # x86 and x86_64 aim at Windows XP (5.1, XP x64 5.2); Windows on Arm is 10 and later anyway
+  wnt=0x0601; xpld=
+  case $arch in
+  x86) wnt=0x0501; xpld="-Wl,--major-os-version=5,--minor-os-version=1,--major-subsystem-version=5,--minor-subsystem-version=1" ;;
+  x86_64) wnt=0x0502; xpld="-Wl,--major-os-version=5,--minor-os-version=2,--major-subsystem-version=5,--minor-subsystem-version=2" ;;
+  esac
   CROSS="--target-os=mingw32 --arch=$arch --enable-cross-compile --cross-prefix=$prefix-
-    --cc=$prefix-$cc --extra-cflags=-D_WIN32_WINNT=0x0601 --extra-ldflags=-static"
+    --cc=$prefix-$cc --extra-cflags=-D_WIN32_WINNT=$wnt --extra-ldflags=-static --extra-ldflags=$xpld"
   case $arch in x86) X264_HOST=i686-w64-mingw32 ;; *) X264_HOST=$arch-w64-mingw32 ;; esac
   X264_ENV="CC=$prefix-$cc AR=$prefix-ar RANLIB=$prefix-ranlib STRIP=$prefix-strip"
-  X264_FLAGS="--extra-cflags=-D_WIN32_WINNT=0x0601"
+  X264_FLAGS="--extra-cflags=-D_WIN32_WINNT=$wnt"
   ;;
 *-linux)
   arch=${TARGET%-linux}

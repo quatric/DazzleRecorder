@@ -5,7 +5,7 @@
 #   ZIG=/path/to/zig scripts/build-all.sh [target ...]
 # Targets are Zig triples; the default is the full list below.
 #
-# Windows 7 needs binaries linked against msvcrt.dll (Zig links the Universal
+# Windows XP and 7 need binaries linked against msvcrt.dll (Zig links the Universal
 # CRT, which Windows 7 lacks). Point these at MinGW-w64 GCC/Clang compilers
 # that use msvcrt (Debian/Ubuntu's gcc-mingw-w64 does) to use them instead:
 #   WIN_CC_x86_64=x86_64-w64-mingw32-gcc-posix WIN_CC_x86=i686-w64-mingw32-gcc-posix
@@ -41,14 +41,17 @@ $V/os/threads_windows.c $V/os/windows_common.c $V/os/windows_usbdk.c $V/os/windo
     FL="-I$V/config/windows -U_WIN32_WINNT -D_WIN32_WINNT=0x0601"
     OSSRC="src/audio_windows.c"
     LIBS="-lole32 -loleaut32 -lwinmm -luuid -lsetupapi -ladvapi32"
-    GUI="src/gui_win32.c"; GUILIBS="-lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -luser32 -ldwmapi -Wl,--subsystem,windows"
+    GUI="src/gui_win32.c"; GUILIBS="-lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -luser32 -Wl,--subsystem,windows"
+    XPLD=
     case $t in
-    x86_64-*)  wcc=$WIN_CC_x86_64;  karch=amd64; ff=x86_64-windows ;;
-    x86-*)     wcc=$WIN_CC_x86;     karch=x86;   ff=x86-windows ;;
+    x86_64-*)  wcc=$WIN_CC_x86_64;  karch=amd64; ff=x86_64-windows; xpver=2 ;;
+    x86-*)     wcc=$WIN_CC_x86;     karch=x86;   ff=x86-windows;    xpver=1 ;;
     aarch64-*) wcc=$WIN_CC_aarch64; karch=;      ff=aarch64-windows ;;
     esac
     if [ -n "$wcc" ]; then
       CC="$wcc"; LIBS="$LIBS -static -lpthread"
+      # Windows XP (5.1; XP x64 is 5.2) can only load a binary that asks for no more than that
+      [ -n "$karch" ] && XPLD="-Wl,--major-os-version=5,--minor-os-version=$xpver,--major-subsystem-version=5,--minor-subsystem-version=$xpver"
     elif [ -n "$karch" ]; then
       echo "warning: $name built with Zig links the Universal CRT and will not start on a stock Windows 7" >&2
     fi
@@ -67,14 +70,14 @@ $V/os/threads_posix.c $V/os/linux_usbfs.c $V/os/linux_netlink.c"
   *) echo "unsupported target $t" >&2; exit 1 ;;
   esac
   echo "== $name ($CC)"
-  $CC $COMMON $FL $LU $SRC $OSSRC src/capture.c $LIBS -o "$OUT/$name/dvc100-capture$ext"
+  $CC $COMMON $FL $LU $SRC $OSSRC src/capture.c $LIBS $XPLD -o "$OUT/$name/dvc100-capture$ext"
   if [ -f "$GUI" ]; then
-    $CC $COMMON $FL $LU $SRC $OSSRC $GUI $GUILIBS $LIBS -o "$OUT/$name/DazzleRecorder$ext"
+    $CC $COMMON $FL $LU $SRC $OSSRC $GUI $GUILIBS $LIBS $XPLD -o "$OUT/$name/DazzleRecorder$ext"
   fi
   if [ $os = windows ]; then
     # Zadig-style driver installer, plus the libusbK driver for Windows 7/8.0
     $CC $COMMON $FL src/driver_win32.c -lsetupapi -lcfgmgr32 -lcrypt32 -lwintrust -lshell32 -ladvapi32 -lole32 \
-        $( [ -n "$wcc" ] && echo -static ) -o "$OUT/$name/dazzle-driver.exe"
+        $( [ -n "$wcc" ] && echo -static ) $XPLD -o "$OUT/$name/dazzle-driver.exe"
     if [ -n "$karch" ]; then
       if [ -n "$LIBUSBK_DIR" ]; then
         mkdir -p "$OUT/$name/driver/libusbK" "$OUT/$name/licenses"

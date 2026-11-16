@@ -48,12 +48,14 @@ int app_get_frame_yuyv(app_t *a, uint8_t *buf, uint64_t *seq); /* buf: width*hei
 void app_peaks(app_t *a, double db[2]);
 
 /* quality: 0 = 6, 1 = 8, 2 = 9.5 Mbit/s MPEG-2 (.mpg, the default); 3, 4, 5 = H.264 (x264, .mp4) at
- * CRF 23, 20, 17. path receives the file name. */
-#define APP_QUALITIES 6
+ * CRF 23, 20, 17; 6..13 = H.264 at 2, 4, 6, 8, 10, 15, 20, 30 Mbit/s; 14 = lossless FFV1 (.mkv).
+ * path receives the file name. */
+#define APP_QUALITIES 15
 extern const char *const app_quality_names[APP_QUALITIES];
 int app_record_start(app_t *a, const char *folder, int quality, int deinterlace, char *path, int pathlen,
                      char *err, int errlen);
-/* codec: a rec_codec_t (recorder.h); level 0..2 is its Standard/High/Maximum. */
+/* codec: a rec_codec_t (recorder.h); level is 0..2 (Standard/High/Maximum) for MPEG-2 and 0..REC_H264_LEVELS-1
+ * (rec_h264_levels) for H.264; lossless has one. */
 int app_record_start_codec(app_t *a, const char *folder, int codec, int level, int deinterlace, char *path,
                            int pathlen, char *err, int errlen);
 /* Stops in the background; done(user, ok, path) runs on a worker thread. */

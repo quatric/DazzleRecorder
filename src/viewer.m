@@ -724,12 +724,13 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _previewCheck.toolTip = @"Show the picture. Off saves the computer the work of drawing it; recording and sound go on.";
 
     _formatPopup = [NSPopUpButton new];
-    [_formatPopup addItemsWithTitles:@[ @"MPEG-2", @"H.264" ]];
-    [_formatPopup selectItemAtIndex:MAX(0, MIN(1, [NSUserDefaults.standardUserDefaults integerForKey:@"format"]))];
+    [_formatPopup addItemsWithTitles:@[ @"MPEG-2", @"H.264", @"Lossless" ]];
+    [_formatPopup selectItemAtIndex:MAX(0, MIN(2, [NSUserDefaults.standardUserDefaults integerForKey:@"format"]))];
     _formatPopup.target = self;
     _formatPopup.action = @selector(formatChanged:);
     _formatPopup.toolTip = @"MPEG-2: a DVD-compatible .mpg, best for burning a DVD. "
-                           @"H.264: a much smaller .mp4 (x264), best for keeping on a computer or sharing.";
+                           @"H.264: a much smaller .mp4 (x264), best for keeping on a computer or sharing. "
+                           @"Lossless: every pixel kept exactly (FFV1 in a .mkv, about 40 GB an hour), for editing or archiving.";
 
     _qualityPopup = [NSPopUpButton new];
     [self fillQualityPopup];
@@ -964,17 +965,24 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [NSUserDefaults.standardUserDefaults setBool:_deinterlace forKey:@"deinterlace"];
 }
 
-/* the quality steps are bitrates for MPEG-2 and x264 constant-quality levels for H.264 */
-static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 };
+/* the quality steps are bitrates for MPEG-2 and x264 constant-quality levels or bitrates for H.264 */
+static const int kMpegKbps[] = { 6000, 8000, 9500 };
 
 - (void)fillQualityPopup
 {
-    NSInteger q = MAX(0, MIN(2, [NSUserDefaults.standardUserDefaults integerForKey:@"quality"]));
+    NSInteger q = MAX(0, [NSUserDefaults.standardUserDefaults integerForKey:@"quality"]);
     [_qualityPopup removeAllItems];
-    if (_formatPopup.indexOfSelectedItem == 1)
-        [_qualityPopup addItemsWithTitles:@[ @"Standard (CRF 23)", @"High (CRF 20)", @"Maximum (CRF 17)" ]];
-    else
+    if (_formatPopup.indexOfSelectedItem == 2) {
+        [_qualityPopup addItemWithTitle:@"Lossless (about 90 Mbit/s)"];
+        q = 0;
+    } else if (_formatPopup.indexOfSelectedItem == 1) {
+        for (int i = 0; i < REC_H264_LEVELS; i++)
+            [_qualityPopup addItemWithTitle:@(rec_h264_levels[i].name)];
+        q = MIN(q, REC_H264_LEVELS - 1);
+    } else {
         [_qualityPopup addItemsWithTitles:@[ @"Standard (6 Mbit/s)", @"High (8 Mbit/s)", @"Maximum (9.5 Mbit/s)" ]];
+        q = MIN(q, 2);
+    }
     [_qualityPopup selectItemAtIndex:q];
     [_bar refit];
 }
@@ -987,7 +995,8 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
 
 - (void)qualityChanged:(id)sender
 {
-    [NSUserDefaults.standardUserDefaults setInteger:_qualityPopup.indexOfSelectedItem forKey:@"quality"];
+    if (_formatPopup.indexOfSelectedItem != 2)
+        [NSUserDefaults.standardUserDefaults setInteger:_qualityPopup.indexOfSelectedItem forKey:@"quality"];
 }
 
 - (void)audioSourceChanged:(id)sender
@@ -1079,8 +1088,10 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
 
 - (void)startRecording
 {
-    rec_codec_t codec = _formatPopup.indexOfSelectedItem == 1 ? REC_H264 : REC_MPEG2;
-    int q = MAX(0, MIN(2, (int)_qualityPopup.indexOfSelectedItem));
+    NSInteger fmt = _formatPopup.indexOfSelectedItem;
+    rec_codec_t codec = fmt == 2 ? REC_LOSSLESS : fmt == 1 ? REC_H264 : REC_MPEG2;
+    int q = MAX(0, (int)_qualityPopup.indexOfSelectedItem);
+    int mq = MIN(q, 2), hq = MIN(q, REC_H264_LEVELS - 1);
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
     NSString *name = [NSString stringWithFormat:@"DazzleRecorder %@.%s", [df stringFromDate:NSDate.date],
@@ -1089,13 +1100,14 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
 
     recorder_opts_t o = {
         .codec = codec,
-        .crf = kH264Crf[q],
+        .crf = rec_h264_levels[hq].crf,
+        .h264_kbps = rec_h264_levels[hq].kbps,
         .width = _width,
         .height = _height,
         .pal = _pal,
         .deinterlace = _deinterlace,
         .widescreen = _widescreen,
-        .video_kbps = kMpegKbps[q],
+        .video_kbps = kMpegKbps[mq],
         .audio_kbps = 224,
         .audio_rate = g_audio_rate,
     };
@@ -1123,7 +1135,7 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 }, kH264Crf[] = { 23, 20, 17 }
         _audioPopup.enabled = NO;
     _preview.badge.hidden = NO;
     [self setStatus:[NSString stringWithFormat:@"Recording %@ %@ to %@", o.deinterlace ? @"deinterlaced" : @"interlaced",
-                                               codec == REC_H264 ? @"H.264" : @"MPEG-2", name]];
+                                               codec == REC_H264 ? @"H.264" : codec == REC_LOSSLESS ? @"lossless" : @"MPEG-2", name]];
 }
 
 - (void)stopRecording

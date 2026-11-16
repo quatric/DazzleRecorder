@@ -48,13 +48,14 @@ tool. These builds have not been tested on real old hardware yet; reports are we
 
 ### Windows
 
-Windows 7 SP1 and later, 32- and 64-bit, and Windows on Arm.
+Windows XP and later (XP SP3 or later on 32-bit, XP x64 too), 32- and 64-bit, and Windows on Arm (Windows 10 and later).
+Windows XP support is new and has not been tested on real XP hardware yet; reports are welcome.
 
 1. Download the installer for your machine: `DazzleRecorder-x86_64-windows-setup.exe` for most PCs,
    `x86` for 32-bit Windows, `aarch64` for Windows on Arm.
 2. Run it and keep **Dazzle driver** ticked. With the Dazzle plugged in, it puts a driver on the Dazzle's
    video interface the way [Zadig](https://zadig.akeo.ie) does: WinUSB on Windows 8.1 and later, and the
-   signed libusbK driver on Windows 7 and 8.0, whose WinUSB cannot stream video. The sound interface keeps
+   signed libusbK driver on Windows 7 and 8.0, whose WinUSB cannot stream video. On Windows XP it uses libusbK too, but unsigned (XP does not require signed drivers): Windows asks you to continue anyway, and sound is captured through the older waveIn interface. The sound interface keeps
    Windows' own audio driver. Windows SmartScreen may warn about an unsigned installer: choose More info →
    Run anyway.
 3. Start **DazzleRecorder** from the Start menu. If the Dazzle was not plugged in during setup, or it still
@@ -120,10 +121,12 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
   video (top field first) like a DVD, which is best for burning a DVD later. On
   uses ffmpeg's yadif at the full field rate (59.94 or 50 fps, so motion stays smooth; DV stays at 29.97/25 as the format requires) and suits computer playback and editing.
 * **Format**: **MPEG-2** (the default) writes a DVD-compatible `.mpg`; **H.264** writes a much smaller
-  `.mp4` with x264 and AAC audio, better for keeping on a computer or sharing. On Windows and Linux both
-  are in the Quality list.
+  `.mp4` with x264 and AAC audio, better for keeping on a computer or sharing; **Lossless** writes a `.mkv`
+  with FFV1 video and uncompressed audio that keeps every pixel of the capture exactly (about 90 Mbit/s, roughly
+  40 GB an hour), for editing or archiving. On Windows and Linux all three are in the Quality list.
 * **Quality**: MPEG-2 at 6, 8 or 9.5 Mbit/s video (DVD-legal) with 224 kbit/s MP2 stereo audio, or H.264 at
-  x264 constant quality 23, 20 or 17 (lower is better) with 192 kbit/s AAC
+  x264 constant quality 23, 20 or 17 (lower is better) or at a bitrate of 2, 4, 6, 8, 10, 15, 20 or 30 Mbit/s with
+  192 kbit/s AAC
 * **Save to**: recording folder (default: your Movies or Videos folder)
 * **Record / Stop** (⌘R on macOS): writes `DazzleRecorder <date>.mpg` (MPEG-2 program stream) or `.mp4`
   (H.264), with a 4:3 display aspect (16:9 with Widescreen)
@@ -176,7 +179,8 @@ Audio only:
 build/dvc100-capture --audio-only -a tape.wav
 ```
 
-Options: `-x FILE.mp4` (H.264 instead of MPEG-2), `-q CRF` (H.264 quality, default 20), `--dv FILE.mov`
+Options: `-x FILE.mp4` (H.264 instead of MPEG-2), `-q CRF` (H.264 quality, default 20; `-b KBPS` with `-x` sets an
+H.264 bitrate instead), `--lossless FILE.mkv` (lossless FFV1), `--dv FILE.mov`
 (DV, light on old CPUs), `-w` (flag the recording 16:9), `-i composite|svideo`, `-n auto|ntsc|pal`, `-f y4m|yuyv`, `-o FILE`,
 `-c FRAMES`, `-t SECONDS`, `-m FILE.mpg`, `-d`, `-b KBPS`, `-a FILE.wav`, `--audio-only`, `--brightness/--contrast/--saturation/--hue 0..255`, `-v`/`-vv`
 for register traces.
@@ -204,8 +208,8 @@ Targets: Windows x86_64, x86 and arm64; Linux x86_64, x86, arm64 and armhf (glib
 (musl). Each folder has `dvc100-capture` (command line), `DazzleRecorder` (GUI: Win32 on Windows, Xlib on
 Linux, which also runs under XWayland) and a static `ffmpeg` (`BUNDLE_FFMPEG=0` skips it).
 
-For Windows 7, the Windows builds must use an msvcrt-based MinGW toolchain, because Zig links the Universal
-CRT, which Windows 7 does not have. The release builds use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)'s
+For Windows XP and 7, the Windows builds must use an msvcrt-based MinGW toolchain, because Zig links the Universal
+CRT, which neither has. The x86 and x86_64 binaries are marked as loadable on Windows XP (5.1 / 5.2), and the release workflow fails if one imports a Windows API that XP lacks. The release builds use [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)'s
 msvcrt variant:
 
 ```sh
