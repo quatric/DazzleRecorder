@@ -38,6 +38,9 @@ if [ ! -f "$SRC/configure" ]; then
   tar -C "$TOP" -xJf "$TOP/ffmpeg-$VER.tar.xz"
 fi
 
+# Windows XP rejects the strict-UTF-8 flag (Vista and later), and its header is missing from XP-level SDKs
+sed -i.bak 's/WC_ERR_INVALID_CHARS/0/' "$SRC/libavutil/wchar_filename.h" 2>/dev/null || true
+
 FEATURES="--disable-everything --disable-autodetect --disable-doc --disable-debug --disable-network
   --disable-ffplay --disable-ffprobe --disable-avdevice --enable-static --disable-shared
   --enable-swscale --enable-swresample

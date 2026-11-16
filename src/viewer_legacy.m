@@ -333,7 +333,8 @@ static void rec_done(void *user, int ok, const char *path);
     if (codec == REC_DV) {
         [_quality addItemWithTitle:@"25 Mbit/s (DV)"];
     } else if (codec == REC_H264) {
-        for (int i = 0; i < REC_H264_LEVELS; i++)
+        int i;
+        for (i = 0; i < REC_H264_LEVELS; i++)
             [_quality addItemWithTitle:[NSString stringWithUTF8String:rec_h264_levels[i].name]];
     } else {
         [_quality addItemsWithTitles:[NSArray arrayWithObjects:@"Standard (6 Mbit/s)", @"High (8 Mbit/s)",
