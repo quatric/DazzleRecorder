@@ -339,7 +339,9 @@ static void choose_folder(void)
     wchar_t wf[1024];
     IShellItem *start = NULL;
     utf8_to_w(G.folder, wf, 1024);
-    if (SUCCEEDED(SHCreateItemFromParsingName(wf, NULL, &iid_item, (void **)&start))) {
+    typedef HRESULT (WINAPI *fromname_t)(PCWSTR, IBindCtx *, REFIID, void **);
+    fromname_t fromname = (fromname_t)(void *)GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SHCreateItemFromParsingName");
+    if (fromname && SUCCEEDED(fromname(wf, NULL, &iid_item, (void **)&start))) {
         IFileOpenDialog_SetFolder(dlg, start);
         IShellItem_Release(start);
     }

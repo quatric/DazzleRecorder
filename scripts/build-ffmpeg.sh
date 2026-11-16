@@ -104,7 +104,7 @@ legacy-*)
   x86_64) wnt=0x0502; xpld="-Wl,--major-os-version=5,--minor-os-version=2,--major-subsystem-version=5,--minor-subsystem-version=2" ;;
   esac
   # ffmpeg's own Windows threads need SRW locks and condition variables (Vista and later): use winpthreads on XP
-  xpthreads=; [ -n "$xpld" ] && xpthreads="--disable-w32threads --enable-pthreads"
+  xpthreads=; [ -n "$xpld" ] && xpthreads="--disable-w32threads --enable-pthreads --disable-bcrypt"
   CROSS="$xpthreads --target-os=mingw32 --arch=$arch --enable-cross-compile --cross-prefix=$prefix-
     --cc=$prefix-$cc --extra-cflags=-D_WIN32_WINNT=$wnt --extra-ldflags=-static --extra-ldflags=$xpld"
   case $arch in x86) X264_HOST=i686-w64-mingw32 ;; *) X264_HOST=$arch-w64-mingw32 ;; esac
