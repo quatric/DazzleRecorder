@@ -567,6 +567,8 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     snprintf(crf, sizeof(crf), "%d", r->o.crf > 0 ? r->o.crf : 20);
     snprintf(keyint, sizeof(keyint), "%d", (r->o.pal ? 50 : 60) * (r->o.deinterlace ? 2 : 1));
     const char *aspect = r->o.widescreen ? "16:9" : "4:3";
+    /* pin the deinterlaced output to the exact field rate, whatever timestamps the filter hands on */
+    const char *fieldrate = r->o.pal ? "50" : "60000/1001";
 
     const char *argv[80];
     int n = 0;
@@ -589,7 +591,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
     switch (r->o.codec) {
     case REC_H264:
         if (r->o.deinterlace) {
-            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv420p"); /* 59.94/50 fps */
+            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv420p"); A("-r"); A(fieldrate); /* 59.94/50 fps */
         } else {
             /* interlaced H.264 (MBAFF, top field first), as broadcast and camcorders do it */
             A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
@@ -615,7 +617,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
         /* FFV1 keeps the capture's 4:2:2 exactly. Interlaced it stays as it came (top field first);
          * deinterlaced (yadif at the field rate) it is no longer a copy of the tape, but still lossless. */
         if (r->o.deinterlace) {
-            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv422p");
+            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv422p"); A("-r"); A(fieldrate);
         } else {
             A("-vf"); A("setfield=tff,format=yuv422p");
             A("-flags"); A("+ilme+ildct");
@@ -641,7 +643,7 @@ recorder_t *rec_open(const char *path, const recorder_opts_t *opts, char *err, i
         break;
     default:
         if (r->o.deinterlace) {
-            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv420p"); /* 59.94/50 fps */
+            A("-vf"); A("yadif=mode=send_field:parity=tff,format=yuv420p"); A("-r"); A(fieldrate); /* 59.94/50 fps */
         } else {
             /* field-aware 4:2:2 -> 4:2:0 so chroma doesn't mix the two fields */
             A("-vf"); A("setfield=tff,scale=interl=1,format=yuv420p");
