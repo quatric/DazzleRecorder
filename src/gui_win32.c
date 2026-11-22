@@ -23,7 +23,7 @@
 enum {
     ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_PREVIEW, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_LINEIN, ID_TIME, ID_STATUS, ID_METER_L,
     ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R, ID_LBL_STOP, ID_STOPAFTER,
-    IDM_RECORD = 200, IDM_LINE21, IDM_CAPTIONS, IDM_CCLOG, IDM_CCCLEAR, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
+    IDM_RECORD = 200, IDM_LINE21, IDM_CAPTIONS, IDM_CCLOG, IDM_CCCLEAR, IDM_SNAPSHOT, IDM_RCLICK_SNAP, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
     TIMER_FRAME = 1, TIMER_UI = 2,
     WM_APP_RECDONE = WM_APP + 1,
 };
@@ -126,6 +126,10 @@ static LRESULT CALLBACK preview_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 1;
     case WM_LBUTTONDBLCLK:
         SendMessageW(G.wnd, WM_COMMAND, IDM_FULLSCREEN, 0);
+        return 0;
+    case WM_RBUTTONUP:
+        if (app_setting_int("right_click_snapshot", 1))
+            SendMessageW(G.wnd, WM_COMMAND, IDM_SNAPSHOT, 0);
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -304,6 +308,8 @@ static void build_menu(void)
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file, MF_STRING, IDM_EXIT, L"E&xit");
     AppendMenuW(view, MF_STRING, IDM_FULLSCREEN, L"&Full Screen\tF11");
+    AppendMenuW(view, MF_STRING | (app_setting_int("right_click_snapshot", 1) ? MF_CHECKED : 0), IDM_RCLICK_SNAP,
+                L"&Right-Click Saves Snapshot");
     HMENU adv = CreatePopupMenu();
     AppendMenuW(adv, MF_STRING, IDM_LINE21, L"Show Line &21");
     AppendMenuW(adv, MF_STRING, IDM_CAPTIONS, L"&Decode Captions");
@@ -732,6 +738,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_OPEN_FOLDER:
             open_folder();
             return 0;
+        case IDM_RCLICK_SNAP: {
+            int on = !app_setting_int("right_click_snapshot", 1);
+            app_set_setting_int("right_click_snapshot", on);
+            CheckMenuItem(G.menu, IDM_RCLICK_SNAP, MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+            return 0;
+        }
         case IDM_FULLSCREEN:
             toggle_fullscreen();
             return 0;

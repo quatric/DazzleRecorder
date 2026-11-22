@@ -205,6 +205,13 @@ static NSString *format_name(int codec)
     [[self openGLContext] makeCurrentContext];
     [self drawPicture];
 }
+
+- (void)rightMouseDown:(NSEvent *)e
+{
+    (void)e;
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"rightClickSnapshot"])
+        [NSApp sendAction:@selector(snapshot:) to:[NSApp delegate] from:self];
+}
 @end
 
 /* ---- level meters (NSLevelIndicator needs 10.4) ---- */
@@ -447,6 +454,8 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     NSMenu *file = [[[NSMenu alloc] initWithTitle:@"File"] autorelease];
     [[file addItemWithTitle:@"Start/Stop Recording" action:@selector(toggleRecord:) keyEquivalent:@"r"] setTarget:self];
     [[file addItemWithTitle:@"Save Snapshot" action:@selector(snapshot:) keyEquivalent:@"s"] setTarget:self];
+    [[file addItemWithTitle:@"Right-Click Saves Snapshot" action:@selector(toggleRightClickSnapshot:) keyEquivalent:@""]
+        setTarget:self];
     [file addItem:[NSMenuItem separatorItem]];
     [[file addItemWithTitle:@"Choose Recording Folder..." action:@selector(chooseFolder:) keyEquivalent:@""]
         setTarget:self];
@@ -602,7 +611,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
         [NSNumber numberWithInt:0], @"input", [NSNumber numberWithBool:YES], @"deinterlace",
         [NSNumber numberWithBool:NO], @"widescreen", [NSNumber numberWithBool:YES], @"preview", [NSNumber numberWithInt:kFormats[0]], @"format",
         [NSNumber numberWithInt:1], @"quality", [NSNumber numberWithBool:YES], @"monitor",
-        [NSNumber numberWithInt:0], @"audioSource", nil];
+        [NSNumber numberWithInt:0], @"audioSource", [NSNumber numberWithBool:YES], @"rightClickSnapshot", nil];
     [ud registerDefaults:defaults];
 
     /* Cocoa must know threads exist before app_core's threads call back into it */
@@ -861,6 +870,8 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
         [item setTitle:app_is_recording(g_app) ? @"Stop Recording" : @"Start Recording"];
     if ([item action] == @selector(toggleRecord:) || [item action] == @selector(snapshot:))
         return g_app && !_finishing;
+    if ([item action] == @selector(toggleRightClickSnapshot:))
+        [item setState:[[self ud] boolForKey:@"rightClickSnapshot"] ? NSOnState : NSOffState];
     if ([item action] == @selector(chooseFolder:))
         return g_app && !app_is_recording(g_app);
     if ([item action] == @selector(captionsChanged:))
@@ -938,6 +949,12 @@ static void rec_done(void *user, int ok, const char *path)
                                                                     [NSString stringWithUTF8String:path], @"path", nil];
     [(Controller *)user performSelectorOnMainThread:@selector(recordingDone:) withObject:info waitUntilDone:NO];
     [pool release];
+}
+
+- (void)toggleRightClickSnapshot:(id)sender
+{
+    (void)sender;
+    [[self ud] setBool:![[self ud] boolForKey:@"rightClickSnapshot"] forKey:@"rightClickSnapshot"];
 }
 
 - (void)snapshot:(id)sender

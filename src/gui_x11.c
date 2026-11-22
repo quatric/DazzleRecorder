@@ -111,7 +111,7 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_ADV, B_LINE21, B_CC, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_ADV, B_LINE21, B_CC, B_RCSNAP, B_COUNT };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -133,6 +133,7 @@ static struct {
     int dirty_picture, dirty_bar;
     int svideo, deint, wide, preview, stop_min, monitor, line_in, quality;
     int adv; /* the Advanced buttons (line 21, captions) are shown */
+    int rcsnap; /* right-click the picture saves a snapshot */
     int line21, cc; /* line 21 in the picture; caption decoding (its log goes to the status line and stderr) */
     uint64_t cc_cursor;
     char folder[1024];
@@ -361,6 +362,10 @@ static void press(int b)
         break;
     case B_OPEN: open_folder(); break;
     case B_ADV: G.adv = !G.adv; break;
+    case B_RCSNAP:
+        G.rcsnap = !G.rcsnap;
+        app_set_setting_int("right_click_snapshot", G.rcsnap);
+        break;
     case B_LINE21:
         if (G.cc)
             break; /* decoding needs it */
@@ -527,9 +532,10 @@ static void draw_bar(void)
     if (G.adv) {
         button(d, B_LINE21, sx, 36, 76, "Line 21", G.line21 || G.cc, !G.cc);
         button(d, B_CC, sx + 82, 36, 84, "Captions", G.cc, 1);
-        sx += 172;
+        button(d, B_RCSNAP, sx + 172, 36, 134, G.rcsnap ? "Right-click: snap" : "Right-click: off", G.rcsnap, 1);
+        sx += 312;
     } else { /* hidden: nothing to click */
-        G.btn[B_LINE21].w = G.btn[B_CC].w = 0;
+        G.btn[B_LINE21].w = G.btn[B_CC].w = G.btn[B_RCSNAP].w = 0;
     }
     snprintf(buf, sizeof(buf), "%s", G.status);
     int maxc = (G.w - sx - 6) / 6;
@@ -609,6 +615,10 @@ static void handle(XEvent *e)
     }
     case ButtonPress: {
         int x = e->xbutton.x, y = e->xbutton.y - (G.h - BAR_H);
+        if (e->xbutton.keycode == 3 && G.rcsnap && (G.fullscreen || y < 0)) {
+            snapshot();
+            break;
+        }
         if (e->xbutton.keycode != 1)
             break;
         if (!G.fullscreen && y >= 0) {
@@ -666,6 +676,7 @@ int main(int argc, char **argv)
     app_setting_str("folder", G.folder, sizeof(G.folder), "");
     if (!G.folder[0])
         app_default_folder(G.folder, sizeof(G.folder));
+    G.rcsnap = app_setting_int("right_click_snapshot", 1);
     G.line21 = app_setting_int("line21", 0);
     G.cc = app_setting_int("captions", 0);
     app_set_show_line21(G.app, G.line21);

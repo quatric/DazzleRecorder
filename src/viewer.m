@@ -398,6 +398,12 @@ static Box *stack(NSArray<NSView *> *views)
     }
     return self;
 }
+- (void)rightMouseDown:(NSEvent *)e
+{
+    (void)e;
+    if ([NSUserDefaults.standardUserDefaults boolForKey:@"rightClickSnapshot"])
+        [NSApp sendAction:@selector(snapshot:) to:NSApp.delegate from:self];
+}
 - (BOOL)isFlipped { return YES; }
 - (void)setWidescreen:(BOOL)on
 {
@@ -611,7 +617,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     pthread_mutex_init(&_ccLock, NULL);
     _ccPending = [NSMutableArray new];
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
-    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"preview" : @YES, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0, @"line21" : @NO, @"captions" : @NO }];
+    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"preview" : @YES, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0, @"line21" : @NO, @"captions" : @NO, @"rightClickSnapshot" : @YES }];
     NSString *folder = [ud stringForKey:@"folder"];
     _folder = folder ? [NSURL fileURLWithPath:folder]
                      : [NSFileManager.defaultManager URLsForDirectory:NSMoviesDirectory
@@ -912,6 +918,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [view addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]
         .keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
     [view addItemWithTitle:@"Show Preview" action:@selector(togglePreview:) keyEquivalent:@"e"];
+    [view addItemWithTitle:@"Right-Click Saves Snapshot" action:@selector(toggleRightClickSnapshot:) keyEquivalent:@""];
     viewItem.submenu = view;
 
     NSMenuItem *advItem = [NSMenuItem new];
@@ -991,6 +998,12 @@ static void audio_cb(const int16_t *s, int frames, void *user)
             [layer flushAndRemoveImage];
     }
     [_preview setNeedsLayout:YES];
+}
+
+- (void)toggleRightClickSnapshot:(id)sender
+{
+    NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
+    [ud setBool:![ud boolForKey:@"rightClickSnapshot"] forKey:@"rightClickSnapshot"];
 }
 
 - (void)togglePreview:(id)sender
@@ -1191,6 +1204,8 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 };
 {
     if (item.action == @selector(toggleRecord:))
         item.title = _rec ? @"Stop Recording" : @"Start Recording";
+    if (item.action == @selector(toggleRightClickSnapshot:))
+        item.state = [NSUserDefaults.standardUserDefaults boolForKey:@"rightClickSnapshot"] ? NSControlStateValueOn : NSControlStateValueOff;
     if (item.action == @selector(togglePreview:))
         item.state = _previewOn ? NSControlStateValueOn : NSControlStateValueOff;
     if (item.action == @selector(captionsChanged:))
