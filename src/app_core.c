@@ -1,5 +1,6 @@
 /* DazzleRecorder engine for the Windows and Linux GUIs; see app_core.h. */
 #include "app_core.h"
+#include "cc608.h"
 #include "recorder.h"
 #include "sysaudio.h"
 #include "monitor_ring.h"
@@ -41,6 +42,8 @@ static void mono_ts(struct timespec *ts)
 #endif
 }
 
+#define CC_LOG_LINES 256
+#define CC_LINE_LEN 256
 #define RING_FRAMES 32768 /* power of two, ~680 ms at 48 kHz */
 
 struct app {
@@ -70,6 +73,13 @@ struct app {
     struct timespec rec_t0;
     uint64_t silence_frames, silence_fed; /* video frames and samples of silence while there is no audio */
     char rec_path[1024];
+
+    /* closed captions: the decoder, and its log as a ring of lines to poll */
+    pthread_mutex_t cc_lock, cc_log_lock; /* decoder; log ring (taken from inside the decoder) */
+    cc608_t *cc;
+    volatile int line21;
+    char cc_log[CC_LOG_LINES][CC_LINE_LEN];
+    uint64_t cc_count;     /* lines logged since the start */
 };
 
 /* ---- video ---- */
@@ -87,6 +97,10 @@ static inline uint32_t yuv_rgb(int y, int u, int v)
 static void frame_cb(const dvc100_frame_t *f, void *user)
 {
     app_t *a = user;
+    pthread_mutex_lock(&a->cc_lock);
+    if (a->cc)
+        cc608_frame(a->cc, f->data, f->width, f->height, f->top_field_first);
+    pthread_mutex_unlock(&a->cc_lock);
     pthread_mutex_lock(&a->rec_lock);
     if (a->rec) {
         rec_video(a->rec, f->data); /* full interlaced frame; ffmpeg deinterlaces properly */
@@ -293,6 +307,8 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
     a->audio_rate = 48000;
     pthread_mutex_init(&a->frame_lock, NULL);
     pthread_mutex_init(&a->rec_lock, NULL);
+    pthread_mutex_init(&a->cc_lock, NULL);
+    pthread_mutex_init(&a->cc_log_lock, NULL);
 
     if ((r = dvc100_start(dev, frame_cb, a))) {
         snprintf(err, (size_t)errlen, "Video streaming failed: %s", dvc100_strerror(r));
@@ -318,6 +334,9 @@ void app_close(app_t *a)
     dvc100_close(a->dev); /* stops video and audio */
     pthread_mutex_destroy(&a->frame_lock);
     pthread_mutex_destroy(&a->rec_lock);
+    cc608_free(a->cc);
+    pthread_mutex_destroy(&a->cc_lock);
+    pthread_mutex_destroy(&a->cc_log_lock);
     free(a->rgb);
     free(a->spare);
     free(a->blend);
@@ -329,6 +348,61 @@ int app_height(app_t *a) { return a->h; }
 int app_is_pal(app_t *a) { return a->pal; }
 void app_set_input(app_t *a, dvc100_input_t input) { dvc100_set_input(a->dev, input); }
 void app_set_deinterlace(app_t *a, int on) { a->deinterlace = on; }
+
+/* ---- line 21 and closed captions ---- */
+
+static void cc_log_line(const char *line, void *user)
+{
+    app_t *a = user;
+    pthread_mutex_lock(&a->cc_log_lock);
+    snprintf(a->cc_log[a->cc_count % CC_LOG_LINES], CC_LINE_LEN, "%s", line);
+    a->cc_count++;
+    pthread_mutex_unlock(&a->cc_log_lock);
+}
+
+static void apply_line21(app_t *a) { dvc100_set_show_line21(a->dev, a->line21 || a->cc != NULL); }
+
+void app_set_show_line21(app_t *a, int on)
+{
+    a->line21 = on != 0;
+    apply_line21(a);
+}
+
+void app_set_captions(app_t *a, int on)
+{
+    pthread_mutex_lock(&a->cc_lock);
+    if (on && !a->cc)
+        a->cc = cc608_new(cc_log_line, a);
+    else if (!on && a->cc) {
+        cc608_free(a->cc);
+        a->cc = NULL;
+    }
+    pthread_mutex_unlock(&a->cc_lock);
+    apply_line21(a);
+}
+
+int app_captions(app_t *a)
+{
+    pthread_mutex_lock(&a->cc_lock);
+    int on = a->cc != NULL;
+    pthread_mutex_unlock(&a->cc_lock);
+    return on;
+}
+
+int app_caption_read(app_t *a, uint64_t *cursor, char *line, int len)
+{
+    int got = 0;
+    pthread_mutex_lock(&a->cc_log_lock);
+    if (*cursor + CC_LOG_LINES < a->cc_count) /* fell behind: skip what was overwritten */
+        *cursor = a->cc_count - CC_LOG_LINES;
+    if (*cursor < a->cc_count) {
+        snprintf(line, (size_t)len, "%s", a->cc_log[*cursor % CC_LOG_LINES]);
+        (*cursor)++;
+        got = 1;
+    }
+    pthread_mutex_unlock(&a->cc_log_lock);
+    return got;
+}
 void app_set_preview(app_t *a, int on) { a->preview = on != 0; }
 int app_preview(app_t *a) { return a->preview; }
 void app_set_widescreen(app_t *a, int on) { a->widescreen = on; }

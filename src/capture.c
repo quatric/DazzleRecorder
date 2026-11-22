@@ -5,6 +5,7 @@
  *   dvc100-capture | ffplay -
  *   dvc100-capture -c 300 -o clip.y4m
  */
+#include "cc608.h"
 #include "dvc100.h"
 #include "recorder.h"
 
@@ -35,6 +36,13 @@ typedef struct {
 } frame_queue_t;
 
 static volatile sig_atomic_t g_stop;
+static cc608_t *g_cc; /* --cc: the caption decoder, fed every frame */
+
+static void cc_log(const char *line, void *user)
+{
+    (void)user;
+    fprintf(stderr, "%s\n", line);
+}
 
 static void on_signal(int sig)
 {
@@ -57,6 +65,8 @@ static void *stop_timer(void *arg)
 static void on_frame(const dvc100_frame_t *f, void *user)
 {
     frame_queue_t *q = user;
+    if (g_cc)
+        cc608_frame(g_cc, f->data, f->width, f->height, f->top_field_first);
     pthread_mutex_lock(&q->lock);
     if (q->count == QUEUE_LEN) {
         q->dropped++;
@@ -108,7 +118,12 @@ static void write_y4m_frame(FILE *out, const uint8_t *yuyv, int w, int h, uint8_
     fwrite(planar, 1, (size_t)w * h * 2, out);
 }
 
-static void mpeg_frame(const dvc100_frame_t *f, void *user) { rec_video(user, f->data); }
+static void mpeg_frame(const dvc100_frame_t *f, void *user)
+{
+    if (g_cc)
+        cc608_frame(g_cc, f->data, f->width, f->height, f->top_field_first);
+    rec_video(user, f->data);
+}
 static void mpeg_audio(const int16_t *s, int frames, void *user) { rec_audio(user, s, frames); }
 
 static int record_encoded(dvc100_t *dev, rec_codec_t codec, const char *path, int w, int h, int pal, int deinterlace,
@@ -170,6 +185,9 @@ static void usage(const char *argv0)
             "      --audio-only               record audio only (with -a), until Ctrl-C or -t\n"
             "  -t, --time SECONDS             stop after this many seconds\n"
             "      --brightness/--contrast/--saturation/--hue 0..255 (128 = default)\n"
+            "      --line21                   keep line 21 in the picture (the picture sits a few lines lower)\n"
+            "      --cc                       decode closed captions (CC1-4, T1-4) and XDS to a live log on stderr;\n"
+            "                                 implies --line21 (the log works with or without a recording)\n"
             "      --info                     print device information and exit\n"
             "  -v, --verbose                  more logging (repeat for register traces)\n",
             argv0);
@@ -187,8 +205,9 @@ int main(int argc, char **argv)
     rec_codec_t codec = REC_MPEG2;
     double seconds = 0;
     int picture[4] = { -1, -1, -1, -1 };
+    int line21 = 0, cc = 0;
 
-    enum { OPT_AUDIO_ONLY = 999, OPT_INFO = 1000, OPT_BRI, OPT_CON, OPT_SAT, OPT_HUE, OPT_DV, OPT_LOSSLESS };
+    enum { OPT_AUDIO_ONLY = 999, OPT_INFO = 1000, OPT_BRI, OPT_CON, OPT_SAT, OPT_HUE, OPT_DV, OPT_LOSSLESS, OPT_LINE21, OPT_CC };
     static const struct option opts[] = {
         { "input", required_argument, NULL, 'i' },
         { "norm", required_argument, NULL, 'n' },
@@ -212,6 +231,8 @@ int main(int argc, char **argv)
         { "contrast", required_argument, NULL, OPT_CON },
         { "saturation", required_argument, NULL, OPT_SAT },
         { "hue", required_argument, NULL, OPT_HUE },
+        { "line21", no_argument, NULL, OPT_LINE21 },
+        { "cc", no_argument, NULL, OPT_CC },
         { "help", no_argument, NULL, 'h' },
         { 0 },
     };
@@ -254,6 +275,8 @@ int main(int argc, char **argv)
         case OPT_AUDIO_ONLY: audio_only = 1; break;
         case 'v': verbose++; break;
         case OPT_INFO: info_only = 1; break;
+        case OPT_LINE21: line21 = 1; break;
+        case OPT_CC: cc = line21 = 1; break;
         case OPT_BRI: picture[0] = atoi(optarg); break;
         case OPT_CON: picture[1] = atoi(optarg); break;
         case OPT_SAT: picture[2] = atoi(optarg); break;
@@ -279,6 +302,10 @@ int main(int argc, char **argv)
         dvc100_close(dev);
         return 1;
     }
+    if (line21)
+        dvc100_set_show_line21(dev, 1);
+    if (cc && !(g_cc = cc608_new(cc_log, NULL)))
+        cc = 0;
     if (picture[0] >= 0) dvc100_set_brightness(dev, picture[0]);
     if (picture[1] >= 0) dvc100_set_contrast(dev, picture[1]);
     if (picture[2] >= 0) dvc100_set_saturation(dev, picture[2]);
@@ -368,6 +395,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "dvc100-capture: %s: %s\n", outpath, strerror(errno));
         dvc100_close(dev);
         return 1;
+    }
+    if (out == stdout && cc && isatty(STDOUT_FILENO)) { /* only the caption log wanted: drop the video */
+#ifdef _WIN32
+        out = fopen("NUL", "wb");
+#else
+        out = fopen("/dev/null", "wb");
+#endif
+        if (!out)
+            out = stdout;
     }
     if (out == stdout && isatty(STDOUT_FILENO)) {
         fprintf(stderr, "dvc100-capture: refusing to write video to a terminal, use -o or a pipe\n");

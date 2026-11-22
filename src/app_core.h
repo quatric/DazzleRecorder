@@ -31,6 +31,13 @@ void app_set_deinterlace(app_t *a, int on); /* preview line blend; recording use
  * returns nothing new. Snapshots need it on. Default on. */
 void app_set_preview(app_t *a, int on);
 int app_preview(app_t *a);
+/* Line 21 in the picture (the picture then sits a few lines lower), and closed caption / XDS decoding into a
+ * log you poll: app_caption_read returns the next line after *cursor (start it at 0), 1 if there was one.
+ * Decoding needs line 21, so it turns it on while it runs. */
+void app_set_show_line21(app_t *a, int on);
+void app_set_captions(app_t *a, int on);
+int app_captions(app_t *a);
+int app_caption_read(app_t *a, uint64_t *cursor, char *line, int len);
 void app_set_widescreen(app_t *a, int on);  /* 16:9 instead of 4:3 for recordings and snapshots */
 void app_set_monitor(app_t *a, int on);     /* play the input through the speakers */
 void app_set_audio_source(app_t *a, int line_in); /* 0 = the capture box, 1 = the computer's Line In */

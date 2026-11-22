@@ -131,6 +131,7 @@ struct dvc100 {
     uint8_t board_flags;    /* config byte +0x20 */
     uint8_t decoder_sel;    /* config byte +0x28 ("VideoDecoderI2C") */
     int reg_decoder;        /* decoder in the bridge's own register block 0x7a00 */
+    int show_line21;        /* capture window starts at the top, so line 21 (closed captions) is in the picture */
 
     sa_input_t *sys_audio;  /* audio through the OS audio input instead of libusb */
 };
@@ -512,6 +513,14 @@ static int em2828x_status(dvc100_t *dev, int *locked, int *is50);
 static int dec16_write(dvc100_t *dev, uint16_t reg, uint16_t mask, uint16_t val);
 static int pick_alt_setting(dvc100_t *dev);
 
+int dvc100_set_show_line21(dvc100_t *dev, int on)
+{
+    dev->show_line21 = on != 0;
+    if (dev->reg_decoder)
+        return 0; /* the black Dazzle's setup always starts at the top */
+    return wr8(dev, EM_R1D_VSTART, dev->show_line21 ? 0 : 2);
+}
+
 int dvc100_set_input(dvc100_t *dev, dvc100_input_t input)
 {
     dev->input = input;
@@ -624,8 +633,9 @@ static int em28xx_video_setup(dvc100_t *dev)
 
     /* capture area */
     r |= wr8(dev, EM_R1C_HSTART, 0);
-    /* vstart 2 skips the two closed-caption lines at the top of the odd field */
-    r |= wr8(dev, EM_R1D_VSTART, 2);
+    /* vstart 2 skips the two closed-caption lines at the top of the odd field; 0 keeps them, which shows
+     * line 21 in the picture (and moves the picture down by those lines, as the original software does) */
+    r |= wr8(dev, EM_R1D_VSTART, dev->show_line21 ? 0 : 2);
     r |= wr8(dev, EM_R1E_CWIDTH, (uint8_t)(w >> 2));
     r |= wr8(dev, EM_R1F_CHEIGHT, (uint8_t)(h >> 2));
     r |= wr8(dev, EM_R1B_OFLOW, (uint8_t)(((w >> 2) >> 8 & 1) | (((h >> 2) >> 8 & 1) << 1)));

@@ -14,6 +14,7 @@
 #import <AudioUnit/AudioUnit.h>
 #include <pthread.h>
 
+#include "cc608.h"
 #include "dvc100.h"
 #include "monitor_ring.h"
 #include "recorder.h"
@@ -462,6 +463,16 @@ static volatile int g_peak[2];
     NSDate *_recStart;
     int _recDeinterlaced;
 
+    /* closed captions: line 21 in the picture, and the decoder with its live log */
+    int _line21, _ccOn;
+    cc608_t *_cc;
+    pthread_mutex_t _ccLock;
+    NSMutableArray<NSString *> *_ccPending;
+    NSPanel *_ccPanel;
+    NSTextView *_ccText;
+    NSDateFormatter *_ccTime;
+    NSButton *_line21Check, *_ccCheck;
+
     NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup;
     NSComboBox *_stopAfterPopup;
     int _stopAfterMin; /* minutes, 0 = no limit */
@@ -476,6 +487,11 @@ static volatile int g_peak[2];
 static void frame_cb(const dvc100_frame_t *f, void *user)
 {
     [(__bridge AppDelegate *)user pushFrame:f];
+}
+
+static void cc_log_cb(const char *line, void *user)
+{
+    [(__bridge AppDelegate *)user ccAppend:[NSString stringWithUTF8String:line]];
 }
 
 static void audio_cb(const int16_t *s, int frames, void *user)
@@ -495,6 +511,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (void)pushFrame:(const dvc100_frame_t *)f
 {
+    pthread_mutex_lock(&_ccLock);
+    if (_cc)
+        cc608_frame(_cc, f->data, f->width, f->height, f->top_field_first);
+    pthread_mutex_unlock(&_ccLock);
     pthread_mutex_lock(&_recLock);
     if (_rec)
     {
@@ -589,8 +609,10 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 {
     _lastLock = [NSLock new];
     pthread_mutex_init(&_recLock, NULL);
+    pthread_mutex_init(&_ccLock, NULL);
+    _ccPending = [NSMutableArray new];
     NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
-    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"preview" : @YES, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0 }];
+    [ud registerDefaults:@{ @"input" : @0, @"deinterlace" : @YES, @"widescreen" : @NO, @"preview" : @YES, @"quality" : @1, @"monitor" : @YES, @"audioSource" : @0, @"format" : @0, @"line21" : @NO, @"captions" : @NO }];
     NSString *folder = [ud stringForKey:@"folder"];
     _folder = folder ? [NSURL fileURLWithPath:folder]
                      : [NSFileManager.defaultManager URLsForDirectory:NSMoviesDirectory
@@ -598,6 +620,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _deinterlace = [ud boolForKey:@"deinterlace"];
     _widescreen = [ud boolForKey:@"widescreen"];
     _previewOn = [ud boolForKey:@"preview"];
+    _line21 = [ud boolForKey:@"line21"];
+    _ccOn = [ud boolForKey:@"captions"];
     dvc100_input_t input = [ud integerForKey:@"input"] == 1 ? DVC100_INPUT_SVIDEO : DVC100_INPUT_COMPOSITE;
 
     dvc100_norm_t norm = DVC100_NORM_AUTO;
@@ -626,6 +650,13 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         [NSApp terminate:nil];
         return;
     }
+
+    if (_ccOn) {
+        pthread_mutex_lock(&_ccLock);
+        _cc = cc608_new(cc_log_cb, (__bridge void *)self);
+        pthread_mutex_unlock(&_ccLock);
+    }
+    [self applyLine21];
 
     _width = 720;
     _pal = dvc100_current_norm(_dev) == DVC100_NORM_PAL;
@@ -718,6 +749,15 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _wideCheck = make_button(@"Widescreen", self, @selector(widescreenChanged:), YES);
     _wideCheck.state = _widescreen ? NSControlStateValueOn : NSControlStateValueOff;
     _wideCheck.toolTip = @"Stretch the picture to 16:9 in the preview, snapshots and recordings.";
+
+    _line21Check = make_button(@"Show Line 21", self, @selector(line21Changed:), YES);
+    _line21Check.state = (_line21 || _ccOn) ? NSControlStateValueOn : NSControlStateValueOff;
+    _line21Check.enabled = !_ccOn;
+    _line21Check.toolTip = @"Keep line 21, where closed captions are sent, in the picture. The picture then sits a few lines lower.";
+
+    _ccCheck = make_button(@"Decode Captions", self, @selector(captionsChanged:), YES);
+    _ccCheck.state = _ccOn ? NSControlStateValueOn : NSControlStateValueOff;
+    _ccCheck.toolTip = @"Read closed captions (CC1-4, text) and XDS (program, network, rating, time) from line 21 into a live log. Needs line 21 in the picture.";
 
     _previewCheck = make_button(@"Preview", self, @selector(previewChanged:), YES);
     _previewCheck.state = _previewOn ? NSControlStateValueOn : NSControlStateValueOff;
@@ -814,7 +854,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [rowA setGap:16 afterView:_audioPopup];
     [rowA setGap:16 afterView:_stopAfterPopup];
 
-    Box *rowOpt = stack(@[ _deintCheck, _wideCheck, _previewCheck ]);
+    Box *rowOpt = stack(@[ _deintCheck, _wideCheck, _previewCheck, _line21Check, _ccCheck ]);
     rowOpt.spacing = 16;
 
     Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
@@ -882,6 +922,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [view addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]
         .keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
     [view addItemWithTitle:@"Show Preview" action:@selector(togglePreview:) keyEquivalent:@"e"];
+    [view addItemWithTitle:@"Show Caption Log" action:@selector(showCaptionLog:) keyEquivalent:@"l"];
     viewItem.submenu = view;
     NSApp.mainMenu = bar;
 }
@@ -957,6 +998,107 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 {
     _previewCheck.state = _previewCheck.state == NSControlStateValueOn ? NSControlStateValueOff : NSControlStateValueOn;
     [self previewChanged:sender];
+}
+
+/* ---- line 21 and closed captions ---- */
+
+- (void)applyLine21
+{
+    if (_dev)
+        dvc100_set_show_line21(_dev, _line21 || _ccOn);
+}
+
+- (void)line21Changed:(id)sender
+{
+    _line21 = _line21Check.state == NSControlStateValueOn;
+    [NSUserDefaults.standardUserDefaults setBool:_line21 forKey:@"line21"];
+    [self applyLine21];
+}
+
+- (void)captionsChanged:(id)sender
+{
+    _ccOn = _ccCheck.state == NSControlStateValueOn;
+    [NSUserDefaults.standardUserDefaults setBool:_ccOn forKey:@"captions"];
+    pthread_mutex_lock(&_ccLock);
+    if (_ccOn && !_cc)
+        _cc = cc608_new(cc_log_cb, (__bridge void *)self);
+    else if (!_ccOn && _cc) {
+        cc608_free(_cc);
+        _cc = NULL;
+    }
+    pthread_mutex_unlock(&_ccLock);
+    /* decoding needs line 21 in the picture: the box follows, and its checkbox is locked on meanwhile */
+    _line21Check.state = (_line21 || _ccOn) ? NSControlStateValueOn : NSControlStateValueOff;
+    _line21Check.enabled = !_ccOn;
+    [self applyLine21];
+    if (_ccOn)
+        [self showCaptionLog:nil];
+}
+
+- (void)ccAppend:(NSString *)line
+{
+    if (!line)
+        return;
+    @synchronized(_ccPending) {
+        [_ccPending addObject:line];
+    }
+}
+
+- (void)showCaptionLog:(id)sender
+{
+    if (!_ccPanel) {
+        _ccPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 520, 320)
+                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                                                        NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
+        _ccPanel.title = @"Caption Log";
+        _ccPanel.releasedWhenClosed = NO;
+        _ccPanel.frameAutosaveName = @"DazzleCaptionLog";
+        NSScrollView *sv = [[NSScrollView alloc] initWithFrame:[_ccPanel.contentView bounds]];
+        sv.hasVerticalScroller = YES;
+        sv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _ccText = [[NSTextView alloc] initWithFrame:sv.bounds];
+        _ccText.editable = NO;
+        _ccText.selectable = YES;
+        _ccText.richText = NO;
+        _ccText.font = [NSFont userFixedPitchFontOfSize:12];
+        _ccText.autoresizingMask = NSViewWidthSizable;
+        _ccText.verticallyResizable = YES;
+        _ccText.textContainer.widthTracksTextView = YES;
+        sv.documentView = _ccText;
+        [_ccPanel.contentView addSubview:sv];
+        [_ccPanel center];
+        _ccTime = [NSDateFormatter new];
+        _ccTime.dateFormat = @"HH:mm:ss";
+    }
+    [_ccPanel makeKeyAndOrderFront:nil];
+}
+
+/* from the UI timer: lines decoded since the last call go into the log window */
+- (void)flushCaptionLog
+{
+    NSArray<NSString *> *lines = nil;
+    @synchronized(_ccPending) {
+        if (_ccPending.count) {
+            lines = [_ccPending copy];
+            [_ccPending removeAllObjects];
+        }
+    }
+    if (!lines)
+        return;
+    if (!_ccText)
+        [self showCaptionLog:nil]; /* a caption arrived with the log never opened */
+    NSString *stamp = [_ccTime stringFromDate:[NSDate date]];
+    NSMutableString *add = [NSMutableString new];
+    for (NSString *l in lines)
+        [add appendFormat:@"%@  %@\n", stamp, l];
+    NSTextStorage *ts = _ccText.textStorage;
+    [ts.mutableString appendString:add];
+    [ts addAttribute:NSFontAttributeName value:_ccText.font range:NSMakeRange(0, ts.length)];
+    if (ts.length > 400000)
+        [ts deleteCharactersInRange:NSMakeRange(0, ts.length - 300000)];
+    [_ccText scrollRangeToVisible:NSMakeRange(ts.length, 0)];
 }
 
 - (void)deinterlaceChanged:(id)sender
@@ -1174,6 +1316,7 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 };
 
 - (void)tick
 {
+    [self flushCaptionLog];
     /* meters, with a little decay so peaks stay visible */
     static double lv[2];
     for (int c = 0; c < 2; c++) {

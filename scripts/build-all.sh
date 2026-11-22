@@ -27,7 +27,7 @@ x86_64-linux-musl aarch64-linux-musl"}
 
 V=vendor/libusb
 COMMON="-O2 -Wall -Wextra -Wno-missing-field-initializers -std=gnu11 -Isrc -I$V"
-SRC="src/dvc100.c src/sysaudio.c src/recorder.c src/app_core.c"
+SRC="src/dvc100.c src/sysaudio.c src/recorder.c src/cc608.c src/app_core.c"
 
 for t in $TARGETS; do
   name=$(echo "$t" | sed 's/\.2\.31$//')

@@ -54,10 +54,13 @@ $(BUILD)/audio_coreaudio.o: src/audio_coreaudio.c src/sysaudio.h | $(BUILD)
 $(BUILD)/recorder.o: src/recorder.c src/recorder.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/dvc100-capture: src/capture.c $(BUILD)/dvc100.o $(BUILD)/sysaudio.o $(BUILD)/audio_coreaudio.o $(BUILD)/recorder.o $(LIBUSB)
+$(BUILD)/cc608.o: src/cc608.c src/cc608.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/dvc100-capture: src/capture.c $(BUILD)/dvc100.o $(BUILD)/sysaudio.o $(BUILD)/audio_coreaudio.o $(BUILD)/recorder.o $(BUILD)/cc608.o $(LIBUSB)
 	$(CC) $(CFLAGS) $^ $(SYSLIBS) -o $@
 
-$(BUILD)/dazzle-capture-app: src/viewer.m $(BUILD)/dvc100.o $(BUILD)/sysaudio.o $(BUILD)/audio_coreaudio.o $(BUILD)/recorder.o $(LIBUSB)
+$(BUILD)/dazzle-capture-app: src/viewer.m $(BUILD)/dvc100.o $(BUILD)/sysaudio.o $(BUILD)/audio_coreaudio.o $(BUILD)/recorder.o $(BUILD)/cc608.o $(LIBUSB)
 	$(CC) $(CFLAGS) -fobjc-arc -c src/viewer.m -o $(BUILD)/viewer.o
 	$(CC) $(CFLAGS) $(BUILD)/viewer.o $(filter-out src/viewer.m,$^) $(SYSLIBS) \
 	    -framework Cocoa -framework AVFoundation -framework CoreMedia -framework CoreVideo \
@@ -83,8 +86,12 @@ app: $(BUILD)/dazzle-capture-app resources/Info.plist resources/AppIcon.icns $(i
 $(BUILD)/test_assembler: tests/test_assembler.c src/dvc100.c src/sysaudio.c src/audio_coreaudio.c $(LIBUSB)
 	$(CC) $(CFLAGS) -I$(V) $^ $(SYSLIBS) -o $@
 
-test: $(BUILD)/test_assembler
+$(BUILD)/test_cc608: tests/test_cc608.c src/cc608.c | $(BUILD)
+	$(CC) $(CFLAGS) $^ -lm -o $@
+
+test: $(BUILD)/test_assembler $(BUILD)/test_cc608
 	$(BUILD)/test_assembler
+	$(BUILD)/test_cc608
 
 install: all
 	install -d $(PREFIX)/bin

@@ -120,6 +120,15 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
 * **Deinterlace**: applies to the preview and the recording. Off records interlaced
   video (top field first) like a DVD, which is best for burning a DVD later. On
   uses ffmpeg's yadif at the full field rate (59.94 or 50 fps, so motion stays smooth; DV stays at 29.97/25 as the format requires) and suits computer playback and editing.
+* **Show Line 21**: keeps line 21, where closed captions are sent, in the picture, as the original
+  software does. The capture window then starts at the top of each field, so the picture sits a couple
+  of lines lower and line 21 shows as a flickering line at the top. Off by default.
+* **Decode Captions**: reads the closed captions (CC1-CC4 and the text services T1-T4) and XDS
+  (program name, length, rating, network, station, time of day...) from line 21 and writes them to a live
+  log (**Caption Log** window; on Linux the log goes to the status line and the terminal). It turns Show
+  Line 21 on while it runs, and needs a source that carries captions (a TV tape or broadcast; most DVD players
+  pass them through on composite and S-Video). Captions are decoded here, in the program, not by ffmpeg, and
+  are not written into the recording.
 * **Format**: **MPEG-2** (the default) writes a DVD-compatible `.mpg`; **H.264** writes a much smaller
   `.mp4` with x264 and AAC audio, better for keeping on a computer or sharing; **Lossless** writes a `.mkv`
   with FFV1 video and uncompressed audio that keeps every pixel of the capture exactly (about 90 Mbit/s, roughly
@@ -182,7 +191,7 @@ build/dvc100-capture --audio-only -a tape.wav
 Options: `-x FILE.mp4` (H.264 instead of MPEG-2), `-q CRF` (H.264 quality, default 20; `-b KBPS` with `-x` sets an
 H.264 bitrate instead), `--lossless FILE.mkv` (lossless FFV1), `--dv FILE.mov`
 (DV, light on old CPUs), `-w` (flag the recording 16:9), `-i composite|svideo`, `-n auto|ntsc|pal`, `-f y4m|yuyv`, `-o FILE`,
-`-c FRAMES`, `-t SECONDS`, `-m FILE.mpg`, `-d`, `-b KBPS`, `-a FILE.wav`, `--audio-only`, `--brightness/--contrast/--saturation/--hue 0..255`, `-v`/`-vv`
+`-c FRAMES`, `-t SECONDS`, `-m FILE.mpg`, `-d`, `-b KBPS`, `-a FILE.wav`, `--audio-only`, `--brightness/--contrast/--saturation/--hue 0..255`, `--line21` (keep line 21 in the picture), `--cc` (decode closed captions and XDS to a live log on stderr; works with or without a recording), `-v`/`-vv`
 for register traces.
 
 ## Limits

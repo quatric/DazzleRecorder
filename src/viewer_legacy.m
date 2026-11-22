@@ -265,6 +265,10 @@ static NSString *format_name(int codec)
     NSPopUpButton *_input, *_format, *_quality, *_audio;
     NSComboBox *_stopAfter;
     NSButton *_deint, *_wide, *_previewCheck, *_monitor, *_record, *_folderButton;
+    NSButton *_line21, *_cc, *_ccLogButton; /* line 21 in the picture, caption decoding, its log window */
+    NSWindow *_ccWindow;
+    NSTextView *_ccText;
+    uint64_t _ccCursor;
     NSTextField *_time, *_status;
     MeterView *_meters;
     NSTimer *_timer;
@@ -405,11 +409,16 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
         sf2.size.width = 120;
         [_stopAfter setFrame:sf2];
     }
-    place_row(row1, 12, 44, 26, 6);
-    float x = place_row(row2, 12, 8, 28, 12);
+    NSArray *row3 = [NSArray arrayWithObjects:_line21, _cc, [NSNumber numberWithFloat:8], _ccLogButton, nil];
+    fit(_line21, 0, 0);
+    fit(_cc, 0, 0);
+    fit(_ccLogButton, 0, 0);
+    place_row(row3, 12, 6, 26, 12);
+    place_row(row1, 12, 74, 26, 6);
+    float x = place_row(row2, 12, 38, 28, 12);
     NSRect sf = [_status frame];
     sf.origin.x = x;
-    sf.origin.y = 13;
+    sf.origin.y = 43;
     sf.size.width = b.size.width - x - 12;
     [_status setFrame:sf];
 }
@@ -480,7 +489,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 - (void)buildWindow
 {
     NSUserDefaults *ud = [self ud];
-    int barH = 78;
+    int barH = 108;
     /* short screens: keep the controls clear of the Dock */
     float maxH = (float)[[NSScreen mainScreen] visibleFrame].size.height - 60;
     NSRect frame = NSMakeRect(0, 0, 800, 600 + barH > maxH ? maxH : 600 + barH);
@@ -508,6 +517,14 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     _deint = make_button(@"Deinterlace", self, @selector(deinterlaceChanged:), YES);
     [_deint setState:[ud boolForKey:@"deinterlace"] ? NSOnState : NSOffState];
     [_deint setToolTip:@"Preview and recording. Off records interlaced video, as on a DVD."];
+    _line21 = make_button(@"Show Line 21", self, @selector(line21Changed:), YES);
+    [_line21 setState:[ud boolForKey:@"line21"] || [ud boolForKey:@"captions"] ? NSOnState : NSOffState];
+    [_line21 setEnabled:![ud boolForKey:@"captions"]];
+    [_line21 setToolTip:@"Keep line 21, where closed captions are sent, in the picture. The picture then sits a few lines lower."];
+    _cc = make_button(@"Decode Captions", self, @selector(captionsChanged:), YES);
+    [_cc setState:[ud boolForKey:@"captions"] ? NSOnState : NSOffState];
+    [_cc setToolTip:@"Read closed captions (CC1-4, text) and XDS (program, network, rating, time) from line 21 into a live log."];
+    _ccLogButton = make_button(@"Caption Log", self, @selector(showCaptionLog:), NO);
     _wide = make_button(@"Widescreen", self, @selector(widescreenChanged:), YES);
     [_wide setState:[ud boolForKey:@"widescreen"] ? NSOnState : NSOffState];
     [_wide setToolTip:@"Stretch the picture to 16:9 in the preview, snapshots and recordings."];
@@ -622,6 +639,8 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     app_set_widescreen(g_app, [ud boolForKey:@"widescreen"]);
     app_set_preview(g_app, [ud boolForKey:@"preview"]);
     app_set_monitor(g_app, [ud boolForKey:@"monitor"]);
+    app_set_show_line21(g_app, [ud boolForKey:@"line21"]);
+    app_set_captions(g_app, [ud boolForKey:@"captions"]);
     [self buildWindow];
     const char *problem = app_audio_problem(g_app);
     if (problem)
@@ -654,6 +673,81 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     app_set_input(g_app, s == 1 ? DVC100_INPUT_SVIDEO : DVC100_INPUT_COMPOSITE);
     [[self ud] setInteger:s forKey:@"input"];
     [self updateTitle];
+}
+
+- (void)line21Changed:(id)sender
+{
+    (void)sender;
+    BOOL on = [_line21 state] == NSOnState;
+    app_set_show_line21(g_app, on);
+    [[self ud] setBool:on forKey:@"line21"];
+}
+
+- (void)captionsChanged:(id)sender
+{
+    BOOL on = [_cc state] == NSOnState;
+    (void)sender;
+    app_set_captions(g_app, on);
+    [[self ud] setBool:on forKey:@"captions"];
+    /* decoding needs line 21 in the picture: its checkbox follows and is locked while it runs */
+    [_line21 setState:on || [[self ud] boolForKey:@"line21"] ? NSOnState : NSOffState];
+    [_line21 setEnabled:!on];
+    if (on)
+        [self showCaptionLog:nil];
+}
+
+- (void)showCaptionLog:(id)sender
+{
+    (void)sender;
+    if (!_ccWindow) {
+        NSRect fr = NSMakeRect(0, 0, 520, 320);
+        NSScrollView *sv;
+        _ccWindow = [[NSWindow alloc] initWithContentRect:fr
+                                                styleMask:NSTitledWindowMask | NSClosableWindowMask |
+                                                          NSResizableWindowMask | NSMiniaturizableWindowMask
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+        [_ccWindow setReleasedWhenClosed:NO];
+        [_ccWindow setTitle:@"Caption Log"];
+        sv = [[[NSScrollView alloc] initWithFrame:fr] autorelease];
+        [sv setHasVerticalScroller:YES];
+        [sv setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        _ccText = [[NSTextView alloc] initWithFrame:[[sv contentView] frame]];
+        [_ccText setEditable:NO];
+        [_ccText setRichText:NO];
+        [_ccText setFont:[NSFont userFixedPitchFontOfSize:12]];
+        [_ccText setMinSize:NSMakeSize(0, 0)];
+        [_ccText setMaxSize:NSMakeSize(1e7f, 1e7f)];
+        [_ccText setVerticallyResizable:YES];
+        [_ccText setAutoresizingMask:NSViewWidthSizable];
+        [[_ccText textContainer] setWidthTracksTextView:YES];
+        [sv setDocumentView:_ccText];
+        [[_ccWindow contentView] addSubview:sv];
+        [_ccWindow center];
+    }
+    [_ccWindow makeKeyAndOrderFront:nil];
+}
+
+/* from the timer: lines decoded since the last call go into the log window */
+- (void)flushCaptionLog
+{
+    char line[300];
+    NSMutableString *add = nil;
+    while (app_caption_read(g_app, &_ccCursor, line, sizeof(line))) {
+        if (!add) {
+            add = [NSMutableString string];
+            [self showCaptionLog:nil]; /* a caption arrived with the log never opened */
+        }
+        [add appendFormat:@"%@  %s\n", [[NSDate date] descriptionWithCalendarFormat:@"%H:%M:%S" timeZone:nil locale:nil],
+                          line];
+    }
+    if (add && _ccText) {
+        NSTextStorage *ts = [_ccText textStorage];
+        [ts replaceCharactersInRange:NSMakeRange([ts length], 0) withString:add];
+        if ([ts length] > 400000)
+            [ts deleteCharactersInRange:NSMakeRange(0, [ts length] - 300000)];
+        [_ccText scrollRangeToVisible:NSMakeRange([ts length], 0)];
+    }
 }
 
 - (void)deinterlaceChanged:(id)sender
@@ -856,6 +950,7 @@ static void rec_done(void *user, int ok, const char *path)
     [_preview poll];
     if (++_ticks % 3)
         return;
+    [self flushCaptionLog];
     if (!_finishing && app_stop_after_due(g_app))
         [self toggleRecord:nil]; /* "Stop after" */
     double db[2];

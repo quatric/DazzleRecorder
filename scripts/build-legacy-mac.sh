@@ -74,7 +74,7 @@ $T-gcc -isysroot "$SDK" -mmacosx-version-min=10.3 -O2 -c scripts/legacy-ppc-runt
 V=vendor/libusb
 LUSRC="$V/core.c $V/descriptor.c $V/hotplug.c $V/io.c $V/strerror.c $V/sync.c $V/os/events_posix.c \
 $V/os/threads_posix.c $V/os/darwin_usb.c"
-SRC="src/dvc100.c src/sysaudio.c src/audio_coreaudio_legacy.c src/recorder.c src/app_core.c"
+SRC="src/dvc100.c src/sysaudio.c src/audio_coreaudio_legacy.c src/recorder.c src/cc608.c src/app_core.c"
 FRAMEWORKS="-framework IOKit -framework CoreFoundation -framework CoreAudio -framework AudioUnit -framework CoreServices"
 
 for arch in ppc i386; do
@@ -96,7 +96,7 @@ for arch in ppc i386; do
   $CC -O2 -Wall -DLEGACY_MAC=1 -I$INC -Isrc -I$V -c src/viewer_legacy.m -o "$O/viewer_legacy.o"
   $CC "$O/viewer_legacy.o" $objs "$O"/libusb/*.o $FRAMEWORKS -framework Cocoa -framework OpenGL $(libs_for $arch) \
       -o "$O/DazzleRecorder"
-  $CC $CFLAGS src/capture.c "$O/dvc100.o" "$O/sysaudio.o" "$O/audio_coreaudio_legacy.o" "$O/recorder.o" \
+  $CC $CFLAGS src/capture.c "$O/dvc100.o" "$O/sysaudio.o" "$O/audio_coreaudio_legacy.o" "$O/recorder.o" "$O/cc608.o" \
       "$O"/libusb/*.o $FRAMEWORKS $(libs_for $arch) -o "$O/dvc100-capture"
 done
 

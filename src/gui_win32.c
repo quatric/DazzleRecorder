@@ -22,7 +22,7 @@
 
 enum {
     ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_PREVIEW, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_LINEIN, ID_TIME, ID_STATUS, ID_METER_L,
-    ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R, ID_LBL_STOP, ID_STOPAFTER,
+    ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R, ID_LBL_STOP, ID_STOPAFTER, ID_LINE21, ID_CAPTIONS, ID_CCLOG,
     IDM_RECORD = 200, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
     TIMER_FRAME = 1, TIMER_UI = 2,
     WM_APP_RECDONE = WM_APP + 1,
@@ -34,6 +34,9 @@ static struct {
     HWND input, deint, wide, previewchk, quality, folder_btn, record, monitor, linein, time, status, meter[2];
     HWND labels[6];
     HWND stopafter;
+    HWND line21, captions, cclog_btn; /* row 3: line 21, caption decoding, the log window */
+    HWND cclog, cclog_edit;
+    uint64_t cc_cursor;
     HFONT font, time_font, badge_font;
     HBRUSH bar_brush;
     HMENU menu;
@@ -198,7 +201,7 @@ static void draw_meter(DRAWITEMSTRUCT *d)
 
 /* ---- layout ---- */
 
-#define BAR_H 84
+#define BAR_H 114
 
 static void layout(void)
 {
@@ -208,7 +211,7 @@ static void layout(void)
         MoveWindow(G.preview, 0, 0, c.right, c.bottom, TRUE);
         return;
     }
-    int bar = S(BAR_H), y1 = c.bottom - bar + S(10), y2 = c.bottom - bar + S(46);
+    int bar = S(BAR_H), y1 = c.bottom - bar + S(10), y2 = c.bottom - bar + S(46), y3 = c.bottom - bar + S(82);
     MoveWindow(G.preview, 0, 0, c.right, c.bottom - bar, TRUE);
     int x = S(12), lh = S(20), ch = S(24);
     struct { HWND h; int w, dy, hh; } row1[] = {
@@ -221,6 +224,9 @@ static void layout(void)
         MoveWindow(row1[i].h, x, y1 + S(row1[i].dy), S(row1[i].w), S(row1[i].hh), TRUE);
         x += S(row1[i].w) + S(i == 1 || i == 4 || i == 6 ? 16 : 6);
     }
+    MoveWindow(G.line21, S(12), y3, S(120), S(20), TRUE);
+    MoveWindow(G.captions, S(12 + 120 + 6), y3, S(140), S(20), TRUE);
+    MoveWindow(G.cclog_btn, S(12 + 120 + 6 + 140 + 10), y3 - S(2), S(110), S(24), TRUE);
     x = S(12);
     MoveWindow(G.record, x, y2, S(110), S(28), TRUE);
     x += S(110 + 16);
@@ -262,6 +268,9 @@ static void build_controls(void)
     G.deint = make(L"BUTTON", L"Deinterlace", BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEINT);
     G.wide = make(L"BUTTON", L"Widescreen", BS_AUTOCHECKBOX | WS_TABSTOP, ID_WIDE);
     G.previewchk = make(L"BUTTON", L"Preview", BS_AUTOCHECKBOX | WS_TABSTOP, ID_PREVIEW);
+    G.line21 = make(L"BUTTON", L"Show Line 21", BS_AUTOCHECKBOX | WS_TABSTOP, ID_LINE21);
+    G.captions = make(L"BUTTON", L"Decode Captions", BS_AUTOCHECKBOX | WS_TABSTOP, ID_CAPTIONS);
+    G.cclog_btn = make(L"BUTTON", L"Caption Log", BS_PUSHBUTTON | WS_TABSTOP, ID_CCLOG);
     G.labels[1] = make(L"STATIC", L"Quality", 0, ID_LBL_QUALITY);
     G.quality = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, ID_QUALITY);
     for (int i = 0; i < APP_QUALITIES; i++) {
@@ -441,7 +450,7 @@ static void snapshot(void)
 static void toggle_fullscreen(void)
 {
     DWORD style = (DWORD)GetWindowLongW(G.wnd, GWL_STYLE);
-    HWND bar[] = { G.input, G.deint, G.wide, G.previewchk, G.quality, G.folder_btn, G.record, G.monitor, G.linein, G.time, G.status,
+    HWND bar[] = { G.line21, G.captions, G.cclog_btn, G.input, G.deint, G.wide, G.previewchk, G.quality, G.folder_btn, G.record, G.monitor, G.linein, G.time, G.status,
                    G.meter[0], G.meter[1], G.labels[0], G.labels[1], G.labels[2], G.labels[3], G.labels[4], G.labels[5],
                    G.stopafter };
     G.fullscreen = !G.fullscreen;
@@ -466,8 +475,79 @@ static void toggle_fullscreen(void)
     layout();
 }
 
+/* ---- the caption log: a window of its own with a read-only text box ---- */
+
+static LRESULT CALLBACK cclog_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_SIZE:
+        if (G.cclog_edit)
+            MoveWindow(G.cclog_edit, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+        return 0;
+    case WM_CLOSE:
+        ShowWindow(h, SW_HIDE); /* the log keeps filling; Caption Log shows it again */
+        return 0;
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+
+static void show_cclog(void)
+{
+    if (!G.cclog) {
+        WNDCLASSEXW wc = { sizeof(wc) };
+        wc.lpfnWndProc = cclog_proc;
+        wc.hInstance = G.inst;
+        wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        wc.lpszClassName = L"DazzleCaptionLog";
+        RegisterClassExW(&wc);
+        G.cclog = CreateWindowExW(0, L"DazzleCaptionLog", L"Caption Log", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                                  CW_USEDEFAULT, S(560), S(340), G.wnd, NULL, G.inst, NULL);
+        G.cclog_edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                       WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY |
+                                           ES_AUTOVSCROLL,
+                                       0, 0, 10, 10, G.cclog, NULL, G.inst, NULL);
+        SendMessageW(G.cclog_edit, WM_SETFONT, (WPARAM)GetStockObject(ANSI_FIXED_FONT), TRUE);
+        SendMessageW(G.cclog_edit, EM_SETLIMITTEXT, 0, 0);
+        RECT c;
+        GetClientRect(G.cclog, &c);
+        MoveWindow(G.cclog_edit, 0, 0, c.right, c.bottom, TRUE);
+    }
+    ShowWindow(G.cclog, SW_SHOWNORMAL);
+    SetForegroundWindow(G.cclog);
+}
+
+/* lines decoded since the last call go to the end of the log */
+static void flush_cclog(void)
+{
+    char line[300];
+    int any = 0;
+    while (app_caption_read(G.app, &G.cc_cursor, line, sizeof(line))) {
+        if (!G.cclog)
+            show_cclog(); /* a caption arrived with the log never opened */
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        char full[340];
+        snprintf(full, sizeof(full), "%02d:%02d:%02d  %s\r\n", t.wHour, t.wMinute, t.wSecond, line);
+        wchar_t w[360];
+        utf8_to_w(full, w, 360);
+        int len = GetWindowTextLengthW(G.cclog_edit);
+        if (len > 80000) { /* keep the box small: drop the oldest quarter */
+            SendMessageW(G.cclog_edit, EM_SETSEL, 0, 20000);
+            SendMessageW(G.cclog_edit, EM_REPLACESEL, FALSE, (LPARAM)L"");
+            len = GetWindowTextLengthW(G.cclog_edit);
+        }
+        SendMessageW(G.cclog_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+        SendMessageW(G.cclog_edit, EM_REPLACESEL, FALSE, (LPARAM)w);
+        any = 1;
+    }
+    if (any)
+        SendMessageW(G.cclog_edit, EM_SCROLLCARET, 0, 0);
+}
+
 static void tick_ui(void)
 {
+    flush_cclog();
     double db[2];
     app_peaks(G.app, db);
     for (int c = 0; c < 2; c++) {
@@ -585,6 +665,29 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 else
                     stop_after_set(app_setting_int("stop_after_min", 0), 1);
             }
+            return 0;
+        case ID_LINE21: {
+            int on = SendMessageW(G.line21, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            app_set_show_line21(G.app, on);
+            app_set_setting_int("line21", on);
+            return 0;
+        }
+        case ID_CAPTIONS: {
+            int on = SendMessageW(G.captions, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            app_set_captions(G.app, on);
+            app_set_setting_int("captions", on);
+            /* decoding needs line 21 in the picture: its checkbox follows and is locked while it runs */
+            if (on)
+                SendMessageW(G.line21, BM_SETCHECK, BST_CHECKED, 0);
+            else
+                SendMessageW(G.line21, BM_SETCHECK, app_setting_int("line21", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+            EnableWindow(G.line21, !on);
+            if (on)
+                show_cclog();
+            return 0;
+        }
+        case ID_CCLOG:
+            show_cclog();
             return 0;
         case ID_PREVIEW: {
             int on = SendMessageW(G.previewchk, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -812,6 +915,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     SendMessageW(G.linein, BM_SETCHECK, line_in ? BST_CHECKED : BST_UNCHECKED, 0);
     if (line_in)
         app_set_audio_source(G.app, 1);
+    {
+        int l21 = app_setting_int("line21", 0), cc = app_setting_int("captions", 0);
+        SendMessageW(G.line21, BM_SETCHECK, l21 || cc ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(G.captions, BM_SETCHECK, cc ? BST_CHECKED : BST_UNCHECKED, 0);
+        EnableWindow(G.line21, !cc);
+        app_set_show_line21(G.app, l21);
+        app_set_captions(G.app, cc);
+    }
     update_folder_button();
     update_title();
     set_status(app_audio_problem(G.app));

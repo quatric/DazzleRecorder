@@ -69,6 +69,10 @@ int dvc100_init(dvc100_t *dev, dvc100_input_t input, dvc100_norm_t norm);
 int dvc100_get_info(dvc100_t *dev, dvc100_info_t *info);
 dvc100_norm_t dvc100_current_norm(dvc100_t *dev);
 int dvc100_set_input(dvc100_t *dev, dvc100_input_t input);
+/* Line 21 (closed captions, XDS) in the picture: the capture window starts at the top of the field, so the
+ * first lines of each field are the VBI lines and the picture sits a couple of lines lower. Off by default;
+ * can be changed while streaming. (The black Dazzle always captures from the top.) */
+int dvc100_set_show_line21(dvc100_t *dev, int on);
 
 /* Picture controls, 0..255 with 128 = default. */
 int dvc100_set_brightness(dvc100_t *dev, int v);
