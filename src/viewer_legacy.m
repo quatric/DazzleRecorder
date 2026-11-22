@@ -77,6 +77,10 @@ static NSString *format_name(int codec)
 - (void)drawPicture;
 @end
 
+static const char *const kPicNames[5] = { "Brightness", "Contrast", "Hue", "Saturation", "Sharpness" };
+static const int kPicDefault[5] = { 128, 128, 128, 128, 0 };
+static NSSlider *g_picSlider[5];
+
 @implementation PreviewView
 - (id)initWithFrame:(NSRect)frame
 {
@@ -439,6 +443,57 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     return l;
 }
 
+- (void)pictureChanged:(id)s
+{
+    app_set_picture(g_app, (int)[s tag], [s intValue]);
+    [[NSUserDefaults standardUserDefaults] setInteger:[s intValue] forKey:[NSString stringWithFormat:@"picture%d", (int)[s tag]]];
+}
+
+- (void)resetPicture:(id)sender
+{
+    int i;
+    for (i = 0; i < 5; i++) {
+        app_set_picture(g_app, i, -1);
+        [g_picSlider[i] setIntValue:kPicDefault[i]];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:[NSString stringWithFormat:@"picture%d", i]];
+    }
+}
+
+/* the saved picture settings go to the capture device */
+- (void)restorePicture
+{
+    int i;
+    for (i = 0; i < 5; i++)
+        if ([[NSUserDefaults standardUserDefaults] objectForKey:[NSString stringWithFormat:@"picture%d", i]])
+            app_set_picture(g_app, i, [g_picSlider[i] intValue]);
+}
+
+- (void)addPictureSlidersTo:(NSMenu *)adv
+{
+    int i;
+    if (![NSMenuItem instancesRespondToSelector:@selector(setView:)]) /* views in menus: 10.5 and later */
+        return;
+    [adv addItem:[NSMenuItem separatorItem]];
+    for (i = 0; i < 5; i++) {
+        NSView *v = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 250, 22)] autorelease];
+        NSTextField *l = [[[NSTextField alloc] initWithFrame:NSMakeRect(14, 2, 74, 17)] autorelease];
+        NSSlider *s = [[[NSSlider alloc] initWithFrame:NSMakeRect(90, 1, 150, 20)] autorelease];
+        NSMenuItem *it = [[[NSMenuItem alloc] initWithTitle:@"" action:NULL keyEquivalent:@""] autorelease];
+        id saved = [[NSUserDefaults standardUserDefaults] objectForKey:[NSString stringWithFormat:@"picture%d", i]];
+        [l setStringValue:[NSString stringWithUTF8String:kPicNames[i]]];
+        [l setBezeled:NO]; [l setDrawsBackground:NO]; [l setEditable:NO]; [l setSelectable:NO];
+        [s setMinValue:0]; [s setMaxValue:255]; [s setContinuous:YES]; [s setTag:i];
+        [s setIntValue:saved ? [saved intValue] : kPicDefault[i]];
+        [s setTarget:self]; [s setAction:@selector(pictureChanged:)];
+        [v addSubview:l];
+        [v addSubview:s];
+        g_picSlider[i] = s;
+        [it performSelector:@selector(setView:) withObject:v];
+        [adv addItem:it];
+    }
+    [[adv addItemWithTitle:@"Reset Picture" action:@selector(resetPicture:) keyEquivalent:@""] setTarget:self];
+}
+
 - (void)buildMenu
 {
     NSMenu *bar = [[[NSMenu alloc] initWithTitle:@""] autorelease];
@@ -473,6 +528,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     [adv addItem:[NSMenuItem separatorItem]];
     [[adv addItemWithTitle:@"Show Caption Log" action:@selector(showCaptionLog:) keyEquivalent:@"l"] setTarget:self];
     [[adv addItemWithTitle:@"Clear Caption Log" action:@selector(clearCaptionLog:) keyEquivalent:@"k"] setTarget:self];
+    [self addPictureSlidersTo:adv];
     [advItem setSubmenu:adv];
     [bar addItem:advItem];
 
@@ -646,6 +702,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     app_set_monitor(g_app, [ud boolForKey:@"monitor"]);
     app_set_show_line21(g_app, [ud boolForKey:@"line21"]);
     app_set_captions(g_app, [ud boolForKey:@"captions"]);
+    [self restorePicture];
     [self buildWindow];
     const char *problem = app_audio_problem(g_app);
     if (problem)

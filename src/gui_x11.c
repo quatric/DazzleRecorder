@@ -111,7 +111,8 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_ADV, B_LINE21, B_CC, B_RCSNAP, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_ADV, B_LINE21, B_CC, B_RCSNAP, B_PICMODE, B_PICSEL, B_PICDN, B_PICUP, B_PICRESET, B_COUNT };
+static const char *const pic_names[5] = { "Brightness", "Contrast", "Hue", "Saturation", "Sharpness" };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -133,6 +134,7 @@ static struct {
     int dirty_picture, dirty_bar;
     int svideo, deint, wide, preview, stop_min, monitor, line_in, quality;
     int adv; /* the Advanced buttons (line 21, captions) are shown */
+    int pic_mode, pic_sel; /* the Advanced strip shows the picture controls; which one - and + change */
     int rcsnap; /* right-click the picture saves a snapshot */
     int line21, cc; /* line 21 in the picture; caption decoding (its log goes to the status line and stderr) */
     uint64_t cc_cursor;
@@ -362,6 +364,26 @@ static void press(int b)
         break;
     case B_OPEN: open_folder(); break;
     case B_ADV: G.adv = !G.adv; break;
+    case B_PICMODE: G.pic_mode = !G.pic_mode; break;
+    case B_PICSEL: G.pic_sel = (G.pic_sel + 1) % 5; break;
+    case B_PICDN:
+    case B_PICUP: {
+        int v = app_get_picture(G.app, G.pic_sel) + (b == B_PICUP ? 8 : -8);
+        v = v < 0 ? 0 : v > 255 ? 255 : v;
+        app_set_picture(G.app, G.pic_sel, v);
+        char k[16];
+        snprintf(k, sizeof(k), "picture%d", G.pic_sel);
+        app_set_setting_int(k, v);
+        break;
+    }
+    case B_PICRESET:
+        for (int i = 0; i < 5; i++) {
+            char k[16];
+            snprintf(k, sizeof(k), "picture%d", i);
+            app_set_picture(G.app, i, -1);
+            app_set_setting_int(k, -1);
+        }
+        break;
     case B_RCSNAP:
         G.rcsnap = !G.rcsnap;
         app_set_setting_int("right_click_snapshot", G.rcsnap);
@@ -530,12 +552,26 @@ static void draw_bar(void)
     button(d, B_ADV, 426, 36, 90, G.adv ? "Advanced <" : "Advanced >", G.adv, 1);
     int sx = 524;
     if (G.adv) {
-        button(d, B_LINE21, sx, 36, 76, "Line 21", G.line21 || G.cc, !G.cc);
-        button(d, B_CC, sx + 82, 36, 84, "Captions", G.cc, 1);
-        button(d, B_RCSNAP, sx + 172, 36, 134, G.rcsnap ? "Right-click: snap" : "Right-click: off", G.rcsnap, 1);
-        sx += 312;
+        if (G.pic_mode) {
+            snprintf(buf, sizeof(buf), "%s %d", pic_names[G.pic_sel], app_get_picture(G.app, G.pic_sel));
+            button(d, B_PICMODE, sx, 36, 60, "< Back", 0, 1);
+            button(d, B_PICSEL, sx + 66, 36, 110, buf, 1, 1);
+            button(d, B_PICDN, sx + 182, 36, 28, "-", 0, 1);
+            button(d, B_PICUP, sx + 216, 36, 28, "+", 0, 1);
+            button(d, B_PICRESET, sx + 250, 36, 56, "Reset", 0, 1);
+            G.btn[B_LINE21].w = G.btn[B_CC].w = G.btn[B_RCSNAP].w = 0;
+            sx += 312;
+        } else {
+            button(d, B_LINE21, sx, 36, 76, "Line 21", G.line21 || G.cc, !G.cc);
+            button(d, B_CC, sx + 82, 36, 84, "Captions", G.cc, 1);
+            button(d, B_RCSNAP, sx + 172, 36, 100, G.rcsnap ? "RClick: snap" : "RClick: off", G.rcsnap, 1);
+            button(d, B_PICMODE, sx + 278, 36, 84, "Picture >", 0, 1);
+            G.btn[B_PICSEL].w = G.btn[B_PICDN].w = G.btn[B_PICUP].w = G.btn[B_PICRESET].w = 0;
+            sx += 368;
+        }
     } else { /* hidden: nothing to click */
-        G.btn[B_LINE21].w = G.btn[B_CC].w = G.btn[B_RCSNAP].w = 0;
+        G.btn[B_LINE21].w = G.btn[B_CC].w = G.btn[B_RCSNAP].w = G.btn[B_PICMODE].w = 0;
+        G.btn[B_PICSEL].w = G.btn[B_PICDN].w = G.btn[B_PICUP].w = G.btn[B_PICRESET].w = 0;
     }
     snprintf(buf, sizeof(buf), "%s", G.status);
     int maxc = (G.w - sx - 6) / 6;
@@ -677,6 +713,13 @@ int main(int argc, char **argv)
     if (!G.folder[0])
         app_default_folder(G.folder, sizeof(G.folder));
     G.rcsnap = app_setting_int("right_click_snapshot", 1);
+    for (int i = 0; i < 5; i++) {
+        char k[16];
+        snprintf(k, sizeof(k), "picture%d", i);
+        int v = app_setting_int(k, -1);
+        if (v >= 0)
+            app_set_picture(G.app, i, v);
+    }
     G.line21 = app_setting_int("line21", 0);
     G.cc = app_setting_int("captions", 0);
     app_set_show_line21(G.app, G.line21);

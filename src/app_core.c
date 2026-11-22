@@ -48,6 +48,7 @@ static void mono_ts(struct timespec *ts)
 
 struct app {
     dvc100_t *dev;
+    int pic[5]; /* picture controls as last set */
     int w, h, pal;
     volatile int deinterlace;
     volatile int widescreen;
@@ -265,6 +266,8 @@ void app_set_audio_source(app_t *a, int line_in)
 static int g_last_error;
 int app_last_error(void) { return g_last_error; }
 
+static const int pic_default[5] = { 128, 128, 128, 128, 0 };
+
 app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
 {
     dvc100_t *dev = NULL;
@@ -295,6 +298,8 @@ app_t *app_open(dvc100_input_t input, dvc100_norm_t norm, char *err, int errlen)
     }
     app_t *a = calloc(1, sizeof(*a));
     a->dev = dev;
+    for (int i = 0; i < 5; i++)
+        a->pic[i] = pic_default[i];
     a->ring.frames = a->ring_frames;
     a->ring.size = RING_FRAMES;
     a->pal = dvc100_current_norm(dev) == DVC100_NORM_PAL;
@@ -347,6 +352,20 @@ int app_width(app_t *a) { return a->w; }
 int app_height(app_t *a) { return a->h; }
 int app_is_pal(app_t *a) { return a->pal; }
 void app_set_input(app_t *a, dvc100_input_t input) { dvc100_set_input(a->dev, input); }
+void app_set_picture(app_t *a, int i, int v)
+{
+    if (i < 0 || i > 4)
+        return;
+    a->pic[i] = v < 0 ? pic_default[i] : v > 255 ? 255 : v;
+    switch (i) {
+    case 0: dvc100_set_brightness(a->dev, a->pic[i]); break;
+    case 1: dvc100_set_contrast(a->dev, a->pic[i]); break;
+    case 2: dvc100_set_hue(a->dev, a->pic[i]); break;
+    case 3: dvc100_set_saturation(a->dev, a->pic[i]); break;
+    case 4: dvc100_set_sharpness(a->dev, a->pic[i]); break;
+    }
+}
+int app_get_picture(app_t *a, int i) { return i < 0 || i > 4 ? 0 : a->pic[i]; }
 void app_set_deinterlace(app_t *a, int on) { a->deinterlace = on; }
 
 /* ---- line 21 and closed captions ---- */

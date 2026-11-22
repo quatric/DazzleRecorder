@@ -254,6 +254,10 @@ static NSSize natural_size(NSView *v)
     return NSMakeSize(ceil(s.width), ceil(s.height));
 }
 
+static const char *const kPicNames[5] = { "Brightness", "Contrast", "Hue", "Saturation", "Sharpness" };
+static const int kPicDefault[5] = { 128, 128, 128, 128, 0 };
+static NSSlider *g_picSlider[5];
+
 @implementation Box {
     NSMutableDictionary<NSValue *, NSNumber *> *_gaps;
 }
@@ -645,6 +649,8 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     int r = dvc100_open(&_dev, 0, 0);
     if (!r)
         r = dvc100_init(_dev, input, norm);
+    if (!r)
+        [self restorePicture];
     if (r) {
         NSAlert *alert = [NSAlert new];
         alert.messageText = @"No Dazzle capture device available";
@@ -891,6 +897,63 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [NSApp activateIgnoringOtherApps:YES];
 }
 
+- (void)applyPicture:(int)i value:(int)v
+{
+    switch (i) {
+    case 0: dvc100_set_brightness(_dev, v); break;
+    case 1: dvc100_set_contrast(_dev, v); break;
+    case 2: dvc100_set_hue(_dev, v); break;
+    case 3: dvc100_set_saturation(_dev, v); break;
+    case 4: dvc100_set_sharpness(_dev, v); break;
+    }
+}
+
+- (void)pictureChanged:(NSSlider *)s
+{
+    [self applyPicture:(int)s.tag value:s.intValue];
+    [NSUserDefaults.standardUserDefaults setInteger:s.intValue forKey:[NSString stringWithFormat:@"picture%d", (int)s.tag]];
+}
+
+- (void)resetPicture:(id)sender
+{
+    for (int i = 0; i < 5; i++) {
+        g_picSlider[i].intValue = kPicDefault[i];
+        [self applyPicture:i value:kPicDefault[i]];
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:[NSString stringWithFormat:@"picture%d", i]];
+    }
+}
+
+/* the saved picture settings go to the capture device */
+- (void)restorePicture
+{
+    for (int i = 0; i < 5; i++)
+        if ([NSUserDefaults.standardUserDefaults objectForKey:[NSString stringWithFormat:@"picture%d", i]])
+            [self applyPicture:i value:g_picSlider[i].intValue];
+}
+
+- (void)addPictureSlidersTo:(NSMenu *)adv
+{
+    [adv addItem:[NSMenuItem separatorItem]];
+    for (int i = 0; i < 5; i++) {
+        NSView *v = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 250, 22)];
+        NSTextField *l = [[NSTextField alloc] initWithFrame:NSMakeRect(14, 2, 74, 17)];
+        l.stringValue = [NSString stringWithUTF8String:kPicNames[i]];
+        l.bezeled = NO; l.drawsBackground = NO; l.editable = NO; l.selectable = NO;
+        NSSlider *s = [[NSSlider alloc] initWithFrame:NSMakeRect(90, 1, 150, 20)];
+        s.minValue = 0; s.maxValue = 255; s.continuous = YES; s.tag = i;
+        id saved = [NSUserDefaults.standardUserDefaults objectForKey:[NSString stringWithFormat:@"picture%d", i]];
+        s.intValue = saved ? [saved intValue] : kPicDefault[i];
+        s.target = self; s.action = @selector(pictureChanged:);
+        [v addSubview:l];
+        [v addSubview:s];
+        g_picSlider[i] = s;
+        NSMenuItem *it = [NSMenuItem new];
+        it.view = v;
+        [adv addItem:it];
+    }
+    [adv addItemWithTitle:@"Reset Picture" action:@selector(resetPicture:) keyEquivalent:@""];
+}
+
 - (void)buildMenu
 {
     NSMenu *bar = [NSMenu new];
@@ -929,6 +992,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [adv addItem:[NSMenuItem separatorItem]];
     [adv addItemWithTitle:@"Show Caption Log" action:@selector(showCaptionLog:) keyEquivalent:@"l"];
     [adv addItemWithTitle:@"Clear Caption Log" action:@selector(clearCaptionLog:) keyEquivalent:@"k"];
+    [self addPictureSlidersTo:adv];
     advItem.submenu = adv;
     NSApp.mainMenu = bar;
 }

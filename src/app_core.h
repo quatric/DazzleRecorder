@@ -26,6 +26,10 @@ int app_width(app_t *a);
 int app_height(app_t *a);
 int app_is_pal(app_t *a);
 void app_set_input(app_t *a, dvc100_input_t input);
+/* Picture controls, i: 0 brightness, 1 contrast, 2 hue, 3 saturation, 4 sharpness; v 0-255, -1 = default
+ * (128, sharpness 0). Applied to the hardware at once, so recordings carry them too. */
+void app_set_picture(app_t *a, int i, int v);
+int app_get_picture(app_t *a, int i);
 void app_set_deinterlace(app_t *a, int on); /* preview line blend; recording uses yadif */
 /* Preview off skips converting frames for display: less CPU, recording unaffected. app_get_frame then
  * returns nothing new. Snapshots need it on. Default on. */

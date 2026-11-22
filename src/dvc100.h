@@ -79,6 +79,7 @@ int dvc100_set_brightness(dvc100_t *dev, int v);
 int dvc100_set_contrast(dvc100_t *dev, int v);
 int dvc100_set_saturation(dvc100_t *dev, int v);
 int dvc100_set_hue(dvc100_t *dev, int v);
+int dvc100_set_sharpness(dvc100_t *dev, int v);
 
 /* Streaming: start launches an event thread that invokes cb per frame. */
 int dvc100_start(dvc100_t *dev, dvc100_frame_cb cb, void *user);

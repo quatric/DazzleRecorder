@@ -574,6 +574,12 @@ int dvc100_set_hue(dvc100_t *dev, int v)
     return dec_wr(dev, 0x0d, (uint8_t)(int8_t)clampi(v - 128, -128, 127));
 }
 
+/* the bridge's sharpness register, 0-15; v is 0-255 */
+int dvc100_set_sharpness(dvc100_t *dev, int v)
+{
+    return wr8(dev, EM_R25_SHARPNESS, (uint8_t)(clampi(v, 0, 255) * 15 / 255));
+}
+
 dvc100_norm_t dvc100_current_norm(dvc100_t *dev) { return dev->norm; }
 
 static dvc100_norm_t detect_norm(dvc100_t *dev)

@@ -122,6 +122,9 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
   uses ffmpeg's yadif at the full field rate (59.94 or 50 fps, so motion stays smooth; DV stays at 29.97/25 as the format requires) and suits computer playback and editing.
 * **Advanced menu** (Mac and Windows; on Linux the **Advanced >** button) holds the options below, which most people never need:
   **Show Line 21**, **Decode Captions**, **Show Caption Log** and **Clear Caption Log** (empties the log window).
+* **Picture sliders**: brightness, contrast, hue, saturation and sharpness, and **Reset Picture**. They change the capture
+  hardware live, so recordings carry them too, and they are remembered. On Windows they are in **Picture Adjustments**, on
+  Linux behind **Picture >** in the Advanced strip (**-** and **+** step the chosen control).
 * **Show Line 21**: keeps line 21, where closed captions are sent, in the picture, as the original
   software does. The capture window then starts at the top of each field, so the picture sits a couple
   of lines lower and line 21 shows as a flickering line at the top. Off by default.
