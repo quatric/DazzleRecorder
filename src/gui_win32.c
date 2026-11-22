@@ -22,8 +22,8 @@
 
 enum {
     ID_INPUT = 100, ID_DEINT, ID_WIDE, ID_PREVIEW, ID_QUALITY, ID_FOLDER, ID_RECORD, ID_MONITOR, ID_LINEIN, ID_TIME, ID_STATUS, ID_METER_L,
-    ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R, ID_LBL_STOP, ID_STOPAFTER, ID_LINE21, ID_CAPTIONS, ID_CCLOG,
-    IDM_RECORD = 200, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
+    ID_METER_R, ID_LBL_INPUT, ID_LBL_QUALITY, ID_LBL_SAVE, ID_LBL_L, ID_LBL_R, ID_LBL_STOP, ID_STOPAFTER,
+    IDM_RECORD = 200, IDM_LINE21, IDM_CAPTIONS, IDM_CCLOG, IDM_CCCLEAR, IDM_SNAPSHOT, IDM_CHOOSE_FOLDER, IDM_OPEN_FOLDER, IDM_EXIT, IDM_FULLSCREEN, IDM_ESCAPE,
     TIMER_FRAME = 1, TIMER_UI = 2,
     WM_APP_RECDONE = WM_APP + 1,
 };
@@ -34,7 +34,6 @@ static struct {
     HWND input, deint, wide, previewchk, quality, folder_btn, record, monitor, linein, time, status, meter[2];
     HWND labels[6];
     HWND stopafter;
-    HWND line21, captions, cclog_btn; /* row 3: line 21, caption decoding, the log window */
     HWND cclog, cclog_edit;
     uint64_t cc_cursor;
     HFONT font, time_font, badge_font;
@@ -201,7 +200,7 @@ static void draw_meter(DRAWITEMSTRUCT *d)
 
 /* ---- layout ---- */
 
-#define BAR_H 114
+#define BAR_H 78
 
 static void layout(void)
 {
@@ -211,7 +210,7 @@ static void layout(void)
         MoveWindow(G.preview, 0, 0, c.right, c.bottom, TRUE);
         return;
     }
-    int bar = S(BAR_H), y1 = c.bottom - bar + S(10), y2 = c.bottom - bar + S(46), y3 = c.bottom - bar + S(82);
+    int bar = S(BAR_H), y1 = c.bottom - bar + S(10), y2 = c.bottom - bar + S(46);
     MoveWindow(G.preview, 0, 0, c.right, c.bottom - bar, TRUE);
     int x = S(12), lh = S(20), ch = S(24);
     struct { HWND h; int w, dy, hh; } row1[] = {
@@ -224,9 +223,6 @@ static void layout(void)
         MoveWindow(row1[i].h, x, y1 + S(row1[i].dy), S(row1[i].w), S(row1[i].hh), TRUE);
         x += S(row1[i].w) + S(i == 1 || i == 4 || i == 6 ? 16 : 6);
     }
-    MoveWindow(G.line21, S(12), y3, S(120), S(20), TRUE);
-    MoveWindow(G.captions, S(12 + 120 + 6), y3, S(140), S(20), TRUE);
-    MoveWindow(G.cclog_btn, S(12 + 120 + 6 + 140 + 10), y3 - S(2), S(110), S(24), TRUE);
     x = S(12);
     MoveWindow(G.record, x, y2, S(110), S(28), TRUE);
     x += S(110 + 16);
@@ -268,9 +264,6 @@ static void build_controls(void)
     G.deint = make(L"BUTTON", L"Deinterlace", BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEINT);
     G.wide = make(L"BUTTON", L"Widescreen", BS_AUTOCHECKBOX | WS_TABSTOP, ID_WIDE);
     G.previewchk = make(L"BUTTON", L"Preview", BS_AUTOCHECKBOX | WS_TABSTOP, ID_PREVIEW);
-    G.line21 = make(L"BUTTON", L"Show Line 21", BS_AUTOCHECKBOX | WS_TABSTOP, ID_LINE21);
-    G.captions = make(L"BUTTON", L"Decode Captions", BS_AUTOCHECKBOX | WS_TABSTOP, ID_CAPTIONS);
-    G.cclog_btn = make(L"BUTTON", L"Caption Log", BS_PUSHBUTTON | WS_TABSTOP, ID_CCLOG);
     G.labels[1] = make(L"STATIC", L"Quality", 0, ID_LBL_QUALITY);
     G.quality = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, ID_QUALITY);
     for (int i = 0; i < APP_QUALITIES; i++) {
@@ -311,10 +304,26 @@ static void build_menu(void)
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file, MF_STRING, IDM_EXIT, L"E&xit");
     AppendMenuW(view, MF_STRING, IDM_FULLSCREEN, L"&Full Screen\tF11");
+    HMENU adv = CreatePopupMenu();
+    AppendMenuW(adv, MF_STRING, IDM_LINE21, L"Show Line &21");
+    AppendMenuW(adv, MF_STRING, IDM_CAPTIONS, L"&Decode Captions");
+    AppendMenuW(adv, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(adv, MF_STRING, IDM_CCLOG, L"Show Caption &Log");
+    AppendMenuW(adv, MF_STRING, IDM_CCCLEAR, L"&Clear Caption Log");
     G.menu = CreateMenu();
     AppendMenuW(G.menu, MF_POPUP, (UINT_PTR)file, L"&File");
     AppendMenuW(G.menu, MF_POPUP, (UINT_PTR)view, L"&View");
+    AppendMenuW(G.menu, MF_POPUP, (UINT_PTR)adv, L"&Advanced");
     SetMenu(G.wnd, G.menu);
+}
+
+/* the Advanced menu's ticks; decoding needs line 21, so that one shows as on and is locked while decoding runs */
+static void sync_advanced_menu(void)
+{
+    int l21 = app_setting_int("line21", 0), cc = app_setting_int("captions", 0);
+    CheckMenuItem(G.menu, IDM_LINE21, MF_BYCOMMAND | (l21 || cc ? MF_CHECKED : MF_UNCHECKED));
+    EnableMenuItem(G.menu, IDM_LINE21, MF_BYCOMMAND | (cc ? MF_GRAYED : MF_ENABLED));
+    CheckMenuItem(G.menu, IDM_CAPTIONS, MF_BYCOMMAND | (cc ? MF_CHECKED : MF_UNCHECKED));
 }
 
 /* ---- actions ---- */
@@ -450,7 +459,7 @@ static void snapshot(void)
 static void toggle_fullscreen(void)
 {
     DWORD style = (DWORD)GetWindowLongW(G.wnd, GWL_STYLE);
-    HWND bar[] = { G.line21, G.captions, G.cclog_btn, G.input, G.deint, G.wide, G.previewchk, G.quality, G.folder_btn, G.record, G.monitor, G.linein, G.time, G.status,
+    HWND bar[] = { G.input, G.deint, G.wide, G.previewchk, G.quality, G.folder_btn, G.record, G.monitor, G.linein, G.time, G.status,
                    G.meter[0], G.meter[1], G.labels[0], G.labels[1], G.labels[2], G.labels[3], G.labels[4], G.labels[5],
                    G.stopafter };
     G.fullscreen = !G.fullscreen;
@@ -666,28 +675,28 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     stop_after_set(app_setting_int("stop_after_min", 0), 1);
             }
             return 0;
-        case ID_LINE21: {
-            int on = SendMessageW(G.line21, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        case IDM_LINE21: {
+            int on = !app_setting_int("line21", 0);
             app_set_show_line21(G.app, on);
             app_set_setting_int("line21", on);
+            sync_advanced_menu();
             return 0;
         }
-        case ID_CAPTIONS: {
-            int on = SendMessageW(G.captions, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        case IDM_CAPTIONS: {
+            int on = !app_setting_int("captions", 0);
             app_set_captions(G.app, on);
             app_set_setting_int("captions", on);
-            /* decoding needs line 21 in the picture: its checkbox follows and is locked while it runs */
-            if (on)
-                SendMessageW(G.line21, BM_SETCHECK, BST_CHECKED, 0);
-            else
-                SendMessageW(G.line21, BM_SETCHECK, app_setting_int("line21", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
-            EnableWindow(G.line21, !on);
+            sync_advanced_menu();
             if (on)
                 show_cclog();
             return 0;
         }
-        case ID_CCLOG:
+        case IDM_CCLOG:
             show_cclog();
+            return 0;
+        case IDM_CCCLEAR:
+            if (G.cclog_edit)
+                SetWindowTextW(G.cclog_edit, L"");
             return 0;
         case ID_PREVIEW: {
             int on = SendMessageW(G.previewchk, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -917,11 +926,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         app_set_audio_source(G.app, 1);
     {
         int l21 = app_setting_int("line21", 0), cc = app_setting_int("captions", 0);
-        SendMessageW(G.line21, BM_SETCHECK, l21 || cc ? BST_CHECKED : BST_UNCHECKED, 0);
-        SendMessageW(G.captions, BM_SETCHECK, cc ? BST_CHECKED : BST_UNCHECKED, 0);
-        EnableWindow(G.line21, !cc);
         app_set_show_line21(G.app, l21);
         app_set_captions(G.app, cc);
+        sync_advanced_menu();
     }
     update_folder_button();
     update_title();

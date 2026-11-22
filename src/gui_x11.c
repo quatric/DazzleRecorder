@@ -111,7 +111,7 @@ static int load_x11(void)
 /* ---- state ---- */
 
 #define BAR_H 64
-enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_LINE21, B_CC, B_COUNT };
+enum { B_RECORD, B_SNAP, B_INPUT, B_DEINT, B_WIDE, B_PREVIEW, B_MONITOR, B_AUDIO, B_QUALITY, B_STOPAFTER, B_FOLDER, B_OPEN, B_ADV, B_LINE21, B_CC, B_COUNT };
 enum { XK_Escape = 0xff1b, XK_F11 = 0xffc8, XK_Return = 0xff0d };
 
 static struct {
@@ -132,6 +132,7 @@ static struct {
     void *img;
     int dirty_picture, dirty_bar;
     int svideo, deint, wide, preview, stop_min, monitor, line_in, quality;
+    int adv; /* the Advanced buttons (line 21, captions) are shown */
     int line21, cc; /* line 21 in the picture; caption decoding (its log goes to the status line and stderr) */
     uint64_t cc_cursor;
     char folder[1024];
@@ -359,6 +360,7 @@ static void press(int b)
             choose_folder();
         break;
     case B_OPEN: open_folder(); break;
+    case B_ADV: G.adv = !G.adv; break;
     case B_LINE21:
         if (G.cc)
             break; /* decoding needs it */
@@ -520,13 +522,20 @@ static void draw_bar(void)
     app_stop_after_label(G.stop_min, sl, sizeof(sl));
     snprintf(buf, sizeof(buf), "Stop: %s", sl);
     button(d, B_STOPAFTER, 296, 36, 124, buf, G.stop_min > 0, 1);
-    button(d, B_LINE21, 426, 36, 76, "Line 21", G.line21 || G.cc, !G.cc);
-    button(d, B_CC, 508, 36, 84, "Captions", G.cc, 1);
+    button(d, B_ADV, 426, 36, 90, G.adv ? "Advanced <" : "Advanced >", G.adv, 1);
+    int sx = 524;
+    if (G.adv) {
+        button(d, B_LINE21, sx, 36, 76, "Line 21", G.line21 || G.cc, !G.cc);
+        button(d, B_CC, sx + 82, 36, 84, "Captions", G.cc, 1);
+        sx += 172;
+    } else { /* hidden: nothing to click */
+        G.btn[B_LINE21].w = G.btn[B_CC].w = 0;
+    }
     snprintf(buf, sizeof(buf), "%s", G.status);
-    int maxc = (G.w - 610) / 6;
+    int maxc = (G.w - sx - 6) / 6;
     if (maxc > 0 && (int)strlen(buf) > maxc)
         buf[maxc] = 0;
-    text(d, 604, 50, buf, rgb(200, 200, 200));
+    text(d, sx, 50, buf, rgb(200, 200, 200));
 
     p_XCopyArea(G.dpy, d, G.wnd, G.gc, 0, 0, (unsigned)G.w, BAR_H, 0, G.h - BAR_H);
     G.dirty_bar = 0;

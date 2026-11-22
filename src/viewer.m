@@ -471,7 +471,6 @@ static volatile int g_peak[2];
     NSPanel *_ccPanel;
     NSTextView *_ccText;
     NSDateFormatter *_ccTime;
-    NSButton *_line21Check, *_ccCheck;
 
     NSPopUpButton *_inputPopup, *_formatPopup, *_qualityPopup, *_audioPopup;
     NSComboBox *_stopAfterPopup;
@@ -750,15 +749,6 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     _wideCheck.state = _widescreen ? NSControlStateValueOn : NSControlStateValueOff;
     _wideCheck.toolTip = @"Stretch the picture to 16:9 in the preview, snapshots and recordings.";
 
-    _line21Check = make_button(@"Show Line 21", self, @selector(line21Changed:), YES);
-    _line21Check.state = (_line21 || _ccOn) ? NSControlStateValueOn : NSControlStateValueOff;
-    _line21Check.enabled = !_ccOn;
-    _line21Check.toolTip = @"Keep line 21, where closed captions are sent, in the picture. The picture then sits a few lines lower.";
-
-    _ccCheck = make_button(@"Decode Captions", self, @selector(captionsChanged:), YES);
-    _ccCheck.state = _ccOn ? NSControlStateValueOn : NSControlStateValueOff;
-    _ccCheck.toolTip = @"Read closed captions (CC1-4, text) and XDS (program, network, rating, time) from line 21 into a live log. Needs line 21 in the picture.";
-
     _previewCheck = make_button(@"Preview", self, @selector(previewChanged:), YES);
     _previewCheck.state = _previewOn ? NSControlStateValueOn : NSControlStateValueOff;
     _previewCheck.toolTip = @"Show the picture. Off saves the computer the work of drawing it; recording and sound go on.";
@@ -854,7 +844,7 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [rowA setGap:16 afterView:_audioPopup];
     [rowA setGap:16 afterView:_stopAfterPopup];
 
-    Box *rowOpt = stack(@[ _deintCheck, _wideCheck, _previewCheck, _line21Check, _ccCheck ]);
+    Box *rowOpt = stack(@[ _deintCheck, _wideCheck, _previewCheck ]);
     rowOpt.spacing = 16;
 
     Box *row2 = stack(@[ _recordButton, _timeLabel, meters, _monitorCheck, _statusLabel ]);
@@ -922,8 +912,17 @@ static void audio_cb(const int16_t *s, int frames, void *user)
     [view addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]
         .keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
     [view addItemWithTitle:@"Show Preview" action:@selector(togglePreview:) keyEquivalent:@"e"];
-    [view addItemWithTitle:@"Show Caption Log" action:@selector(showCaptionLog:) keyEquivalent:@"l"];
     viewItem.submenu = view;
+
+    NSMenuItem *advItem = [NSMenuItem new];
+    [bar addItem:advItem];
+    NSMenu *adv = [[NSMenu alloc] initWithTitle:@"Advanced"];
+    [adv addItemWithTitle:@"Show Line 21" action:@selector(line21Changed:) keyEquivalent:@""];
+    [adv addItemWithTitle:@"Decode Captions" action:@selector(captionsChanged:) keyEquivalent:@""];
+    [adv addItem:[NSMenuItem separatorItem]];
+    [adv addItemWithTitle:@"Show Caption Log" action:@selector(showCaptionLog:) keyEquivalent:@"l"];
+    [adv addItemWithTitle:@"Clear Caption Log" action:@selector(clearCaptionLog:) keyEquivalent:@"k"];
+    advItem.submenu = adv;
     NSApp.mainMenu = bar;
 }
 
@@ -1010,14 +1009,14 @@ static void audio_cb(const int16_t *s, int frames, void *user)
 
 - (void)line21Changed:(id)sender
 {
-    _line21 = _line21Check.state == NSControlStateValueOn;
+    _line21 = !_line21;
     [NSUserDefaults.standardUserDefaults setBool:_line21 forKey:@"line21"];
     [self applyLine21];
 }
 
 - (void)captionsChanged:(id)sender
 {
-    _ccOn = _ccCheck.state == NSControlStateValueOn;
+    _ccOn = !_ccOn;
     [NSUserDefaults.standardUserDefaults setBool:_ccOn forKey:@"captions"];
     pthread_mutex_lock(&_ccLock);
     if (_ccOn && !_cc)
@@ -1027,12 +1026,15 @@ static void audio_cb(const int16_t *s, int frames, void *user)
         _cc = NULL;
     }
     pthread_mutex_unlock(&_ccLock);
-    /* decoding needs line 21 in the picture: the box follows, and its checkbox is locked on meanwhile */
-    _line21Check.state = (_line21 || _ccOn) ? NSControlStateValueOn : NSControlStateValueOff;
-    _line21Check.enabled = !_ccOn;
     [self applyLine21];
     if (_ccOn)
         [self showCaptionLog:nil];
+}
+
+- (void)clearCaptionLog:(id)sender
+{
+    if (_ccText)
+        [_ccText.textStorage.mutableString setString:@""];
 }
 
 - (void)ccAppend:(NSString *)line
@@ -1191,6 +1193,15 @@ static const int kMpegKbps[] = { 6000, 8000, 9500 };
         item.title = _rec ? @"Stop Recording" : @"Start Recording";
     if (item.action == @selector(togglePreview:))
         item.state = _previewOn ? NSControlStateValueOn : NSControlStateValueOff;
+    if (item.action == @selector(captionsChanged:))
+        item.state = _ccOn ? NSControlStateValueOn : NSControlStateValueOff;
+    if (item.action == @selector(line21Changed:)) {
+        /* decoding needs line 21 in the picture: it shows as on and is locked while decoding runs */
+        item.state = (_line21 || _ccOn) ? NSControlStateValueOn : NSControlStateValueOff;
+        return !_ccOn;
+    }
+    if (item.action == @selector(clearCaptionLog:))
+        return _ccText != nil;
     return YES;
 }
 

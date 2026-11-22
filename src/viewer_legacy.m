@@ -265,7 +265,6 @@ static NSString *format_name(int codec)
     NSPopUpButton *_input, *_format, *_quality, *_audio;
     NSComboBox *_stopAfter;
     NSButton *_deint, *_wide, *_previewCheck, *_monitor, *_record, *_folderButton;
-    NSButton *_line21, *_cc, *_ccLogButton; /* line 21 in the picture, caption decoding, its log window */
     NSWindow *_ccWindow;
     NSTextView *_ccText;
     uint64_t _ccCursor;
@@ -409,16 +408,11 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
         sf2.size.width = 120;
         [_stopAfter setFrame:sf2];
     }
-    NSArray *row3 = [NSArray arrayWithObjects:_line21, _cc, [NSNumber numberWithFloat:8], _ccLogButton, nil];
-    fit(_line21, 0, 0);
-    fit(_cc, 0, 0);
-    fit(_ccLogButton, 0, 0);
-    place_row(row3, 12, 6, 26, 12);
-    place_row(row1, 12, 74, 26, 6);
-    float x = place_row(row2, 12, 38, 28, 12);
+    place_row(row1, 12, 42, 26, 6);
+    float x = place_row(row2, 12, 6, 28, 12);
     NSRect sf = [_status frame];
     sf.origin.x = x;
-    sf.origin.y = 43;
+    sf.origin.y = 11;
     sf.size.width = b.size.width - x - 12;
     [_status setFrame:sf];
 }
@@ -463,6 +457,16 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     [fileItem setSubmenu:file];
     [bar addItem:fileItem];
 
+    NSMenuItem *advItem = [[[NSMenuItem alloc] initWithTitle:@"Advanced" action:NULL keyEquivalent:@""] autorelease];
+    NSMenu *adv = [[[NSMenu alloc] initWithTitle:@"Advanced"] autorelease];
+    [[adv addItemWithTitle:@"Show Line 21" action:@selector(line21Changed:) keyEquivalent:@""] setTarget:self];
+    [[adv addItemWithTitle:@"Decode Captions" action:@selector(captionsChanged:) keyEquivalent:@""] setTarget:self];
+    [adv addItem:[NSMenuItem separatorItem]];
+    [[adv addItemWithTitle:@"Show Caption Log" action:@selector(showCaptionLog:) keyEquivalent:@"l"] setTarget:self];
+    [[adv addItemWithTitle:@"Clear Caption Log" action:@selector(clearCaptionLog:) keyEquivalent:@"k"] setTarget:self];
+    [advItem setSubmenu:adv];
+    [bar addItem:advItem];
+
     [NSApp setMainMenu:bar];
     if ([NSApp respondsToSelector:@selector(setAppleMenu:)]) /* 10.3 needs it to treat the first menu as the app menu */
         [NSApp performSelector:@selector(setAppleMenu:) withObject:appMenu];
@@ -489,7 +493,7 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 - (void)buildWindow
 {
     NSUserDefaults *ud = [self ud];
-    int barH = 108;
+    int barH = 76;
     /* short screens: keep the controls clear of the Dock */
     float maxH = (float)[[NSScreen mainScreen] visibleFrame].size.height - 60;
     NSRect frame = NSMakeRect(0, 0, 800, 600 + barH > maxH ? maxH : 600 + barH);
@@ -517,14 +521,6 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
     _deint = make_button(@"Deinterlace", self, @selector(deinterlaceChanged:), YES);
     [_deint setState:[ud boolForKey:@"deinterlace"] ? NSOnState : NSOffState];
     [_deint setToolTip:@"Preview and recording. Off records interlaced video, as on a DVD."];
-    _line21 = make_button(@"Show Line 21", self, @selector(line21Changed:), YES);
-    [_line21 setState:[ud boolForKey:@"line21"] || [ud boolForKey:@"captions"] ? NSOnState : NSOffState];
-    [_line21 setEnabled:![ud boolForKey:@"captions"]];
-    [_line21 setToolTip:@"Keep line 21, where closed captions are sent, in the picture. The picture then sits a few lines lower."];
-    _cc = make_button(@"Decode Captions", self, @selector(captionsChanged:), YES);
-    [_cc setState:[ud boolForKey:@"captions"] ? NSOnState : NSOffState];
-    [_cc setToolTip:@"Read closed captions (CC1-4, text) and XDS (program, network, rating, time) from line 21 into a live log."];
-    _ccLogButton = make_button(@"Caption Log", self, @selector(showCaptionLog:), NO);
     _wide = make_button(@"Widescreen", self, @selector(widescreenChanged:), YES);
     [_wide setState:[ud boolForKey:@"widescreen"] ? NSOnState : NSOffState];
     [_wide setToolTip:@"Stretch the picture to 16:9 in the preview, snapshots and recordings."];
@@ -678,20 +674,17 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 - (void)line21Changed:(id)sender
 {
     (void)sender;
-    BOOL on = [_line21 state] == NSOnState;
+    BOOL on = ![[self ud] boolForKey:@"line21"];
     app_set_show_line21(g_app, on);
     [[self ud] setBool:on forKey:@"line21"];
 }
 
 - (void)captionsChanged:(id)sender
 {
-    BOOL on = [_cc state] == NSOnState;
+    BOOL on = ![[self ud] boolForKey:@"captions"];
     (void)sender;
     app_set_captions(g_app, on);
     [[self ud] setBool:on forKey:@"captions"];
-    /* decoding needs line 21 in the picture: its checkbox follows and is locked while it runs */
-    [_line21 setState:on || [[self ud] boolForKey:@"line21"] ? NSOnState : NSOffState];
-    [_line21 setEnabled:!on];
     if (on)
         [self showCaptionLog:nil];
 }
@@ -729,6 +722,13 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
 }
 
 /* from the timer: lines decoded since the last call go into the log window */
+- (void)clearCaptionLog:(id)sender
+{
+    (void)sender;
+    if (_ccText)
+        [[[_ccText textStorage] mutableString] setString:@""];
+}
+
 - (void)flushCaptionLog
 {
     char line[300];
@@ -863,6 +863,16 @@ static float place_row(NSArray *views, float x, float y, float h, float gap)
         return g_app && !_finishing;
     if ([item action] == @selector(chooseFolder:))
         return g_app && !app_is_recording(g_app);
+    if ([item action] == @selector(captionsChanged:))
+        [item setState:[[self ud] boolForKey:@"captions"] ? NSOnState : NSOffState];
+    if ([item action] == @selector(line21Changed:)) {
+        /* decoding needs line 21 in the picture: it shows as on and is locked while decoding runs */
+        BOOL cc = [[self ud] boolForKey:@"captions"];
+        [item setState:cc || [[self ud] boolForKey:@"line21"] ? NSOnState : NSOffState];
+        return !cc;
+    }
+    if ([item action] == @selector(clearCaptionLog:))
+        return _ccText != nil;
     return YES;
 }
 

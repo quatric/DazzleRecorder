@@ -120,12 +120,14 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
 * **Deinterlace**: applies to the preview and the recording. Off records interlaced
   video (top field first) like a DVD, which is best for burning a DVD later. On
   uses ffmpeg's yadif at the full field rate (59.94 or 50 fps, so motion stays smooth; DV stays at 29.97/25 as the format requires) and suits computer playback and editing.
+* **Advanced menu** (Mac and Windows; on Linux the **Advanced >** button) holds the options below, which most people never need:
+  **Show Line 21**, **Decode Captions**, **Show Caption Log** and **Clear Caption Log** (empties the log window).
 * **Show Line 21**: keeps line 21, where closed captions are sent, in the picture, as the original
   software does. The capture window then starts at the top of each field, so the picture sits a couple
   of lines lower and line 21 shows as a flickering line at the top. Off by default.
 * **Decode Captions**: reads the closed captions (CC1-CC4 and the text services T1-T4) and XDS
   (program name, length, rating, network, station, time of day...) from line 21 and writes them to a live
-  log (**Caption Log** window; on Linux the log goes to the status line and the terminal). It turns Show
+  log (**Caption Log** window, which **Clear Caption Log** empties; on Linux the log goes to the status line and the terminal). It turns Show
   Line 21 on while it runs, and needs a source that carries captions (a TV tape or broadcast; most DVD players
   pass them through on composite and S-Video). Captions are decoded here, in the program, not by ffmpeg, and
   are not written into the recording. The line 21 slicer (clock run-in correlation, parity bit repair) and the
