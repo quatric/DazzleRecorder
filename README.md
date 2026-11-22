@@ -128,7 +128,8 @@ The GUI (Cocoa on macOS, Win32 on Windows, Xlib on Linux) shows a 4:3 live previ
   log (**Caption Log** window; on Linux the log goes to the status line and the terminal). It turns Show
   Line 21 on while it runs, and needs a source that carries captions (a TV tape or broadcast; most DVD players
   pass them through on composite and S-Video). Captions are decoded here, in the program, not by ffmpeg, and
-  are not written into the recording.
+  are not written into the recording. The line 21 slicer (clock run-in correlation, parity bit repair) and the
+  XDS descriptions are ported to C from [eshaz/cc_decoder](https://github.com/eshaz/cc_decoder) (Unlicense).
 * **Format**: **MPEG-2** (the default) writes a DVD-compatible `.mpg`; **H.264** writes a much smaller
   `.mp4` with x264 and AAC audio, better for keeping on a computer or sharing; **Lossless** writes a `.mkv`
   with FFV1 video and uncompressed audio that keeps every pixel of the capture exactly (about 90 Mbit/s, roughly

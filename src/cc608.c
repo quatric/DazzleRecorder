@@ -1,35 +1,112 @@
-/* EIA-608 closed captions and XDS from the captured line 21. See cc608.h. */
+/* EIA-608 closed captions and XDS from the captured line 21. See cc608.h.
+ *
+ * The slicer (run-in correlation, bit sampling, single-bit parity repair) and the XDS descriptions follow
+ * eshaz/cc_decoder (https://github.com/eshaz/cc_decoder, from CordySmith/cc_decoder by Max Smith; The
+ * Unlicense), rewritten in C. */
 #include "cc608.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /* ---- slicer ---- */
 
 #define MAXN 768
-#define MAXEDGES 256
+#define MAXW 24
+#define MAXT 320
+#define RUNIN 6.5     /* cycles of the clock run-in matched (the real one has 7) */
+#define MIN_SCORE 0.5 /* minimum normalized correlation of the run-in and start bits */
 
-int cc608_slice(const uint8_t *y, int n, uint8_t out[2])
+/* Templates of the run-in and the three start bits (0 0 1) for each bit width searched; the width is a
+ * fraction of the line the way eshaz/cc_decoder does it (35..41 thousandths of the line per bit). */
+typedef struct {
+    int n, nw;
+    float w[MAXW];
+    int run[MAXW], len[MAXW], total[MAXW];
+    double var[MAXW];
+    float t[MAXW][MAXT];
+} tset_t;
+
+static void tset_build(tset_t *s, int n)
 {
-    if (n < 400)
-        return 0;
-    if (n > MAXN)
-        n = MAXN;
-    int s[MAXN];
-    s[0] = y[0];
-    s[n - 1] = y[n - 1];
-    for (int i = 1; i < n - 1; i++)
-        s[i] = (y[i - 1] + 2 * y[i] + y[i + 1] + 2) >> 2;
+    memset(s, 0, sizeof(*s));
+    s->n = n;
+    int lo = (int)floor(0.035 * n + 0.5), hi = (int)floor(0.041 * n + 0.5);
+    int nw = (hi - lo) * 4 + 1;
+    if (nw < 1)
+        nw = 1;
+    if (nw > MAXW)
+        nw = MAXW;
+    for (int i = 0; i < nw; i++) {
+        float w = nw > 1 ? (float)lo + (float)(hi - lo) * (float)i / (float)(nw - 1) : (float)lo;
+        int run = (int)floor(RUNIN * w + 0.5), zeros = (int)floor(2 * w + 0.5), ones = (int)floor(w + 0.5);
+        int len = run + zeros + ones;
+        if (len > MAXT)
+            break;
+        double mean = 0;
+        for (int k = 0; k < len; k++) {
+            float v = k < run ? 0.5f + 0.5f * (float)cos(2 * M_PI * k / w) : k < run + zeros ? 0.f : 1.f;
+            s->t[i][k] = v;
+            mean += v;
+        }
+        mean /= len;
+        double var = 0;
+        for (int k = 0; k < len; k++) {
+            s->t[i][k] -= (float)mean;
+            var += (double)s->t[i][k] * s->t[i][k];
+        }
+        s->w[i] = w;
+        s->run[i] = run;
+        s->len[i] = len;
+        s->total[i] = (int)floor((RUNIN + 3 + 16) * w + 0.5);
+        s->var[i] = var;
+        s->nw = i + 1;
+    }
+}
 
-    /* black and high level: the 3rd and 97th percentile of the line */
+/* One bit: mean and standard deviation of the middle 80% of its cell; 1 when above the threshold. */
+static int get_bit(const float *x, int n, float w, int pad, float pre_end, int idx, float thr, float *sd)
+{
+    float start = pre_end + (float)idx * w;
+    int s = (int)floor(start + 0.5f) + pad, e = (int)floor(start + w + 0.5f) - pad;
+    if (s < 0)
+        s = 0;
+    if (e > n)
+        e = n;
+    if (e <= s) {
+        *sd = 1;
+        return 0;
+    }
+    double m = 0, v = 0;
+    for (int i = s; i < e; i++)
+        m += x[i];
+    m /= e - s;
+    for (int i = s; i < e; i++)
+        v += (x[i] - m) * (x[i] - m);
+    *sd = (float)sqrt(v / (e - s));
+    return m > thr;
+}
+
+static int slice_with(tset_t *ts, const uint8_t *y, int n, uint8_t out[2])
+{
+    if (n < 400 || n > MAXN)
+        return 0;
+    if (ts->n != n)
+        tset_build(ts, n);
+
+    /* normalize the line between its 2nd and 98th percentile */
     int hist[256] = { 0 };
     for (int i = 0; i < n; i++)
-        hist[s[i]]++;
+        hist[y[i]]++;
     int lo = 0, hi = 255, acc = 0;
     for (int v = 0; v < 256; v++) {
         acc += hist[v];
-        if (acc * 100 >= n * 3) {
+        if (acc * 100 >= n * 2) {
             lo = v;
             break;
         }
@@ -37,87 +114,99 @@ int cc608_slice(const uint8_t *y, int n, uint8_t out[2])
     acc = 0;
     for (int v = 255; v >= 0; v--) {
         acc += hist[v];
-        if (acc * 100 >= n * 3) {
+        if (acc * 100 >= n * 2) {
             hi = v;
             break;
         }
     }
     if (hi - lo < 24)
         return 0;
-    const int thr = (lo + hi) / 2, hyst = (hi - lo) / 6 > 2 ? (hi - lo) / 6 : 2;
-
-    /* threshold crossings, with hysteresis, at sub-sample positions */
-    float edge[MAXEDGES];
-    int rising[MAXEDGES], ne = 0;
-    int state = s[0] > thr;
-    for (int i = 1; i < n && ne < MAXEDGES; i++) {
-        if (!state && s[i] > thr + hyst) {
-            int j = i;
-            while (j > 0 && s[j - 1] > thr)
-                j--;
-            float p = (float)j;
-            if (j > 0 && s[j] != s[j - 1])
-                p = (float)(j - 1) + (float)(thr - s[j - 1]) / (float)(s[j] - s[j - 1]);
-            edge[ne] = p;
-            rising[ne++] = 1;
-            state = 1;
-        } else if (state && s[i] < thr - hyst) {
-            int j = i;
-            while (j > 0 && s[j - 1] <= thr)
-                j--;
-            float p = (float)j;
-            if (j > 0 && s[j] != s[j - 1])
-                p = (float)(j - 1) + (float)(thr - s[j - 1]) / (float)(s[j] - s[j - 1]);
-            edge[ne] = p;
-            rising[ne++] = 0;
-            state = 0;
-        }
+    float x[MAXN];
+    for (int i = 0; i < n; i++) {
+        float v = (float)(y[i] - lo) / (float)(hi - lo);
+        x[i] = v < 0 ? 0 : v > 1 ? 1 : v;
+    }
+    double cs[MAXN + 1], cs2[MAXN + 1];
+    cs[0] = cs2[0] = 0;
+    for (int i = 0; i < n; i++) {
+        cs[i + 1] = cs[i] + x[i];
+        cs2[i + 1] = cs2[i] + (double)x[i] * x[i];
     }
 
-    /* clock run-in (a sine at the bit rate: an edge every half bit), then low for the two 0 start bits, then
-     * the 1 start bit's rising edge */
-    for (int k = 0; k + 1 < ne; k++) {
-        if (rising[k] || !rising[k + 1])
-            continue;
-        float gap = edge[k + 1] - edge[k];
-        if (gap < 34 || gap > 78)
-            continue;
-        int cnt = 0, j = k;
-        float sum = 0;
-        while (j > 0 && edge[j] - edge[j - 1] >= 9 && edge[j] - edge[j - 1] <= 19) {
-            sum += edge[j] - edge[j - 1];
-            cnt++;
-            j--;
-        }
-        if (cnt < 8)
-            continue;
-        float T = 2 * sum / (float)cnt;
-        if (T < 25.5f || T > 28.5f)
-            continue;
-        if (gap < 1.6f * T || gap > 2.9f * T)
-            continue;
-        float ts = edge[k + 1];
-        int bits[16], fits = 1;
-        for (int i = 0; i < 16; i++) {
-            int c = (int)(ts + ((float)i + 1.5f) * T + 0.5f);
-            if (c < 1 || c + 1 >= n) {
-                fits = 0;
-                break;
+    /* the clock run-in and start bits: best normalized correlation over the bit widths and the positions where
+     * the whole 19 bits after the run-in still fit on the line */
+    double best = -1;
+    int bpos = -1, bw = -1;
+    for (int wi = 0; wi < ts->nw; wi++) {
+        const int len = ts->len[wi], last = n - ts->total[wi];
+        const float *t = ts->t[wi];
+        for (int p = 0; p < last; p++) {
+            double dot = 0;
+            for (int k = 0; k < len; k++)
+                dot += (double)x[p + k] * t[k];
+            double sx = cs[p + len] - cs[p], sx2 = cs2[p + len] - cs2[p];
+            double vx = sx2 - sx * sx / len;
+            double score = dot * dot / (ts->var[wi] * vx + 1e-12);
+            if (score > best) {
+                best = score;
+                bpos = p;
+                bw = wi;
             }
-            bits[i] = (s[c - 1] + s[c] + s[c + 1]) / 3 > thr;
         }
-        if (!fits)
-            continue;
-        int b1 = 0, b2 = 0;
-        for (int i = 0; i < 8; i++) {
-            b1 |= bits[i] << i;
-            b2 |= bits[8 + i] << i;
-        }
-        out[0] = (uint8_t)b1;
-        out[1] = (uint8_t)b2;
-        return 1;
     }
-    return 0;
+    if (bw < 0 || best < MIN_SCORE)
+        return 0;
+
+    const float w = ts->w[bw];
+    const float pre_start = (float)bpos, pre_end = (float)(bpos + ts->run[bw]);
+    const int pad = (int)ceil(0.1 * w);
+    float thr = 0;
+    {
+        int a = (int)floor(pre_start + 0.5f), b = (int)floor(pre_end + 0.5f);
+        double m = 0;
+        for (int i = a; i < b; i++)
+            m += x[i];
+        thr = (float)(m / (b - a));
+    }
+    float sd;
+    if (get_bit(x, n, w, pad, pre_end, 0, thr, &sd) != 0 || get_bit(x, n, w, pad, pre_end, 1, thr, &sd) != 0 ||
+        get_bit(x, n, w, pad, pre_end, 2, thr, &sd) != 1)
+        return 0;
+
+    /* two bytes: 7 data bits LSB first, then the parity bit; a single doubtful data bit is repaired by the
+     * parity when the parity bit itself reads cleanly */
+    for (int b = 0; b < 2; b++) {
+        const int first = 3 + b * 8;
+        int bits[8], err = 0, worst = 0, ones = 0;
+        float sds[8], worst_sd = 0;
+        for (int i = 0; i < 8; i++) {
+            bits[i] = get_bit(x, n, w, pad, pre_end, first + i, thr, &sds[i]);
+            if (i < 7) {
+                ones += bits[i];
+                if (sds[i] > 0.3f) {
+                    err++;
+                    if (sds[i] > worst_sd) {
+                        worst_sd = sds[i];
+                        worst = i;
+                    }
+                }
+            }
+        }
+        const int want = (ones + 1) & 1; /* the parity bit that gives odd parity overall */
+        if (err == 1 && bits[7] != want && sds[7] < 0.3f)
+            bits[worst] ^= 1;
+        int v = 0;
+        for (int i = 0; i < 8; i++)
+            v |= bits[i] << i;
+        out[b] = (uint8_t)v;
+    }
+    return 1;
+}
+
+int cc608_slice(const uint8_t *y, int n, uint8_t out[2])
+{
+    static tset_t shared; /* only the capture thread slices */
+    return slice_with(&shared, y, n, out);
 }
 
 /* ---- text cells ---- */
@@ -143,6 +232,7 @@ struct cc608 {
     int active[2];    /* per field: the channel number the data bytes belong to */
     uint8_t last[2][2];
     int have_last[2];
+    tset_t tset;
     int pref[2], miss[2];
     unsigned long count[2];
     /* XDS */
@@ -508,6 +598,114 @@ static void xds_text(const uint8_t *d, int n, char *out, size_t cap)
     out[k] = 0;
 }
 
+static const char *const lang[8] = { "Unknown", "English", "Spanish", "French", "German", "Italian", "Other", "None" };
+static const char *const atype_main[8] = { "Unknown", "Mono", "Simulated stereo", "Stereo", "Stereo surround",
+                                           "Data service", "Other", "None" };
+static const char *const atype_sap[8] = { "Unknown", "Mono", "Video descriptions", "Non-program audio",
+                                          "Special effects", "Data service", "Other", "None" };
+static const char *const cgms[4] = { "copying permitted", "no more copies", "one generation of copies",
+                                     "no copying permitted" };
+static const char *const aps[4] = { "no analog protection", "PSP on", "PSP on, 2-line split burst",
+                                    "PSP on, 4-line split burst" };
+static const char *const dow[8] = { "?", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+static const char *const mon[13] = { "?", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+                                     "Nov", "Dec" };
+
+/* Content advisory (CEA-608-E 9.5.1.5): the rating system is in a1 a0 (and a3 a2 for the Canadian ones) */
+static void advisory(const uint8_t *d, int n, char *s, size_t cap)
+{
+    static const char *const mpa[8] = { "N/A", "G", "PG", "PG-13", "R", "NC-17", "X", "Not rated" };
+    static const char *const tv[8] = { "None", "TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA", "None" };
+    static const char *const cen[8] = { "E", "C", "C8+", "G", "PG", "14+", "18+", "Invalid" };
+    static const char *const cfr[8] = { "E", "G", "8 ans +", "13 ans +", "16 ans +", "18 ans +", "Invalid", "Invalid" };
+    if (n < 2) {
+        snprintf(s, cap, "Rating: ?");
+        return;
+    }
+    const int c1 = d[0] & 0x7f, c2 = d[1] & 0x7f, a0 = (c1 >> 3) & 1, a1 = (c1 >> 4) & 1;
+    if (!a0) { /* MPA, system 0 and 2 */
+        snprintf(s, cap, "Rating: MPA %s", mpa[c1 & 7]);
+    } else if (!a1) { /* U.S. TV Parental Guidelines */
+        int k = snprintf(s, cap, "Rating: %s", tv[c2 & 7]);
+        int g = c2 & 7;
+        if (g == 2 && (c2 & 0x20))
+            k += snprintf(s + k, cap - (size_t)k, " Fantasy Violence");
+        if (g == 4 || g == 5 || g == 6) {
+            if (c2 & 0x20)
+                k += snprintf(s + k, cap - (size_t)k, " Violence");
+            if (c2 & 0x10)
+                k += snprintf(s + k, cap - (size_t)k, " Sexual Situations");
+            if (c2 & 0x08)
+                k += snprintf(s + k, cap - (size_t)k, " Adult Language");
+            if ((g == 4 || g == 5) && (c1 & 0x20))
+                snprintf(s + k, cap - (size_t)k, " Suggestive Dialogue");
+        }
+    } else { /* a1 a0 = 1 1: a3 a2 pick the Canadian systems */
+        const int a2 = (c1 >> 5) & 1, a3 = (c2 >> 3) & 1;
+        if (!a3 && !a2)
+            snprintf(s, cap, "Rating: Canada %s", cen[c2 & 7]);
+        else if (!a3 && a2)
+            snprintf(s, cap, "Rating: Canada (French) %s", cfr[c2 & 7]);
+        else
+            snprintf(s, cap, "Rating (other system): %02x %02x", c1, c2);
+    }
+}
+
+/* Information in the program packets that both the current and the next program carry */
+static int program_info(cc608_t *c, int slot, int type, const uint8_t *d, int n, const char *pre)
+{
+    char s[160], t[80];
+    switch (type) {
+    case 0x05:
+        advisory(d, n, t, sizeof(t));
+        snprintf(s, sizeof(s), "%s%s", pre, t);
+        xds_log(c, slot, type, s);
+        return 1;
+    case 0x06:
+        if (n >= 2)
+            snprintf(s, sizeof(s), "%sAudio: main %s (%s), second %s (%s)", pre, lang[(d[0] >> 3) & 7],
+                     atype_main[d[0] & 7], lang[(d[1] >> 3) & 7], atype_sap[d[1] & 7]);
+        else
+            return 1;
+        xds_log(c, slot, type, s);
+        return 1;
+    case 0x07: {
+        int k = snprintf(s, sizeof(s), "%sCaption services:", pre);
+        for (int i = 0; i < n && i < 8; i++) {
+            int b = d[i];
+            k += snprintf(s + k, sizeof(s) - (size_t)k, "%s %s F%d C%d %s", i ? "," : "", lang[(b >> 3) & 7],
+                          1 + ((b >> 2) & 1), 1 + ((b >> 1) & 1), (b & 1) ? "Text" : "Caption");
+            if (k >= (int)sizeof(s) - 40)
+                break;
+        }
+        xds_log(c, slot, type, s);
+        return 1;
+    }
+    case 0x08:
+        if (n >= 1) {
+            snprintf(s, sizeof(s), "%sCopy control: %s, %s%s", pre, cgms[(d[0] >> 3) & 3], aps[(d[0] >> 1) & 3],
+                     (n >= 2 && (d[1] & 1)) ? ", redistribution controlled" : "");
+            xds_log(c, slot, type, s);
+        }
+        return 1;
+    case 0x09:
+        if (n >= 2) {
+            snprintf(s, sizeof(s), "%sAspect ratio: lines %d to %d%s", pre, 22 + (d[0] & 0x3f), 262 - (d[1] & 0x3f),
+                     (n >= 3 && (d[2] & 1)) ? ", anamorphic" : "");
+            xds_log(c, slot, type, s);
+        }
+        return 1;
+    default:
+        if (type >= 0x10 && type <= 0x17) {
+            xds_text(d, n, t, sizeof(t));
+            snprintf(s, sizeof(s), "%sProgram description %d: %s", pre, type - 0x0f, t);
+            xds_log(c, slot, type, s);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void xds_packet(cc608_t *c, int slot)
 {
     const uint8_t *d = c->xdata[slot];
@@ -518,8 +716,8 @@ static void xds_packet(cc608_t *c, int slot)
         switch (type) {
         case 0x01:
             if (n >= 4 && (d[1] & 0x1f) < 24 && (d[0] & 0x3f) < 60 && (d[3] & 0x0f) >= 1 && (d[3] & 0x0f) <= 12) {
-                snprintf(s, sizeof(s), "%sProgram start %02d:%02d on %d/%d", pre, d[1] & 0x1f, d[0] & 0x3f,
-                         d[3] & 0x0f, d[2] & 0x1f);
+                snprintf(s, sizeof(s), "%sProgram start %02d:%02d on %d/%d%s", pre, d[1] & 0x1f, d[0] & 0x3f,
+                         d[3] & 0x0f, d[2] & 0x1f, (d[3] & 0x10) ? " (tape delayed)" : "");
                 xds_log(c, slot, type, s);
             }
             return;
@@ -555,34 +753,9 @@ static void xds_packet(cc608_t *c, int slot)
             xds_log(c, slot, type, s);
             return;
         }
-        case 0x05:
-            if (n >= 2) {
-                int c1 = d[0] & 0x3f, c2 = d[1] & 0x3f;
-                static const char *const mpaa[8] = { "N/A", "G", "PG", "PG-13", "R", "NC-17", "X", "Not rated" };
-                static const char *const tv[8] = { "None", "TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA", "None" };
-                if ((c1 & 0x18) == 0x08) {
-                    snprintf(s, sizeof(s), "%sRating: %s", pre, mpaa[c1 & 7]);
-                } else if ((c1 & 0x18) == 0x10 || (c1 & 0x18) == 0x00) {
-                    int k = snprintf(s, sizeof(s), "%sRating: %s", pre, tv[c2 & 7]);
-                    if (c1 & 0x20 || c2 & 0x38) {
-                        k += snprintf(s + k, sizeof(s) - (size_t)k, " (");
-                        if (c1 & 0x20)
-                            k += snprintf(s + k, sizeof(s) - (size_t)k, "D");
-                        if (c2 & 0x08)
-                            k += snprintf(s + k, sizeof(s) - (size_t)k, "L");
-                        if (c2 & 0x10)
-                            k += snprintf(s + k, sizeof(s) - (size_t)k, "S");
-                        if (c2 & 0x20)
-                            k += snprintf(s + k, sizeof(s) - (size_t)k, (c2 & 7) == 2 ? "FV" : "V");
-                        snprintf(s + k, sizeof(s) - (size_t)k, ")");
-                    }
-                } else {
-                    snprintf(s, sizeof(s), "%sRating (other system): %02x %02x", pre, c1, c2);
-                }
-                xds_log(c, slot, type, s);
-            }
-            return;
         default:
+            if (program_info(c, slot, type, d, n, pre))
+                return;
             break;
         }
     } else if (slot == 3) { /* channel */
@@ -604,27 +777,46 @@ static void xds_packet(cc608_t *c, int slot)
                 xds_log(c, slot, type, s);
             }
             return;
+        case 0x04:
+            if (n >= 4) {
+                snprintf(s, sizeof(s), "Transmission signal ID: %04x", ((d[0] & 0xf) << 12) | ((d[1] & 0xf) << 8) |
+                                                                         ((d[2] & 0xf) << 4) | (d[3] & 0xf));
+                xds_log(c, slot, type, s);
+            }
+            return;
         default:
             break;
         }
     } else if (slot == 4) { /* miscellaneous */
         switch (type) {
         case 0x01:
-            if (n >= 4 && (d[1] & 0x1f) < 24 && (d[0] & 0x3f) < 60) {
-                snprintf(s, sizeof(s), "Time of day: %02d:%02d on %d/%d", d[1] & 0x1f, d[0] & 0x3f, d[3] & 0x0f,
-                         d[2] & 0x1f);
-                xds_log(c, slot, type, s);
+            if (n >= 4 && (d[1] & 0x1f) < 24 && (d[0] & 0x3f) < 60 && (d[3] & 0x0f) >= 1 && (d[3] & 0x0f) <= 12) {
+                int k = snprintf(s, sizeof(s), "Time of day (UTC): %02d:%02d %s %d", d[1] & 0x1f, d[0] & 0x3f,
+                                 mon[d[3] & 0x0f], d[2] & 0x1f);
+                if (n >= 6)
+                    k += snprintf(s + k, sizeof(s) - (size_t)k, " %d, %s", 1990 + (d[5] & 0x3f), dow[d[4] & 7]);
+                if (d[1] & 0x20)
+                    k += snprintf(s + k, sizeof(s) - (size_t)k, ", daylight saving");
+                if (d[3] & 0x10)
+                    snprintf(s + k, sizeof(s) - (size_t)k, ", tape delayed");
+                xds_log(c, slot, type, s); /* once a minute, as the minute changes */
             }
             return;
         case 0x04:
             if (n >= 1) {
-                snprintf(s, sizeof(s), "Time zone: UTC-%d%s", d[0] & 0x1f, d[0] & 0x20 ? " (daylight saving)" : "");
+                snprintf(s, sizeof(s), "Time zone: UTC-%d%s", d[0] & 0x1f, d[0] & 0x20 ? " (observes daylight saving)" : "");
                 xds_log(c, slot, type, s);
             }
             return;
         default:
             break;
         }
+    }
+    else if (slot == 5 && type == 0x02) { /* weather message */
+        xds_text(d, n, t, sizeof(t));
+        snprintf(s, sizeof(s), "Weather: %s", t);
+        xds_log(c, slot, type, s);
+        return;
     }
     /* anything else: class and type, and the bytes */
     static const char *const cname[8] = { "?", "Current", "Future", "Channel", "Misc", "Public service", "Reserved", "Private" };
@@ -685,13 +877,27 @@ static int parity_ok(uint8_t v)
 void cc608_pair(cc608_t *c, int field, uint8_t r1, uint8_t r2)
 {
     field &= 1;
-    if (!parity_ok(r1) || !parity_ok(r2)) {
+    const int ok1 = parity_ok(r1), ok2 = parity_ok(r2);
+    const int in_xds = field == 1 && (c->xcur >= 0 || (ok1 && (r1 & 0x7f) > 0 && (r1 & 0x7f) < 0x10));
+    if ((!ok1 && !ok2) || ((!ok1 || !ok2) && in_xds)) {
         c->have_last[field] = 0;
         return;
     }
     int b1 = r1 & 0x7f, b2 = r2 & 0x7f;
     if (!b1 && !b2)
         return; /* padding */
+    /* one byte failed its parity (47 CFR 79.101): a command is dropped, a character shows as a solid block */
+    if (!ok2) {
+        if (b1 >= 0x10 && b1 < 0x20) {
+            c->have_last[field] = 0;
+            return;
+        }
+        b2 = 0x7f;
+    }
+    if (!ok1) {
+        b1 = 0x7f;
+        b2 = ok2 ? b2 : 0x7f;
+    }
     c->count[field]++;
     if (b1 < 0x10) {
         if (field == 1)
@@ -737,6 +943,10 @@ void cc608_frame(cc608_t *c, const uint8_t *yuyv, int width, int height, int top
             if (r != c->pref[f])
                 order[n++] = r;
         int found = 0;
+        if (c->pref[f] < 0 && c->miss[f] > 30 && (c->miss[f] & 3)) { /* nothing for a second: look every 4th frame */
+            c->miss[f]++;
+            continue;
+        }
         for (int i = 0; i < n && !found; i++) {
             int row = order[i] * 2 + parity;
             if (row >= height)
@@ -745,7 +955,7 @@ void cc608_frame(cc608_t *c, const uint8_t *yuyv, int width, int height, int top
             for (int x = 0; x < width; x++)
                 y[x] = src[x * 2];
             uint8_t pair[2];
-            if (cc608_slice(y, width, pair)) {
+            if (slice_with(&c->tset, y, width, pair)) {
                 found = 1;
                 c->pref[f] = order[i];
                 c->miss[f] = 0;

@@ -74,6 +74,18 @@ int main(void)
     /* null pair 0x80 0x80 */
     make_line(y, 720, 18, 26.81f, 0x80, 0x80, 16, 120);
     CHECK(cc608_slice(y, 720, out) && out[0] == 0x80 && out[1] == 0x80);
+    /* noisy line, and a run-in at the very start of the line */
+    for (int k = 0; k < 6; k++) {
+        uint8_t b1 = odd((uint8_t)(0x30 + k * 5)), b2 = odd((uint8_t)(0x50 + k * 3));
+        make_line(y, 720, k == 5 ? 0 : 20, 26.81f, b1, b2, 16, 100);
+        unsigned r = 12345u + (unsigned)k;
+        for (int i = 0; i < 720; i++) {
+            r = r * 1103515245u + 12345u;
+            int v = y[i] + (int)((r >> 16) % 13) - 6;
+            y[i] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+        }
+        CHECK(cc608_slice(y, 720, out) && out[0] == b1 && out[1] == b2);
+    }
     /* flat line and video-like noise carry no caption */
     memset(y, 16, sizeof(y));
     CHECK(!cc608_slice(y, 720, out));
@@ -120,6 +132,46 @@ int main(void)
         pair(c, 1, 0x05, 0x01); pair(c, 1, 'A', 'B'); pair(c, 1, 'C', 0x00); pair(c, 1, 0x0f, ck);
         CHECK(nlog == 1);
     }
+    /* a character that fails its parity shows as a solid block, a command that does is dropped */
+    nlog = 0;
+    pair(c, 0, 0x14, 0x25); pair(c, 0, 0x14, 0x25);
+    cc608_pair(c, 0, odd('a'), (uint8_t)(odd('b') ^ 0x80)); /* b has bad parity */
+    pair(c, 0, 0x14, 0x2d);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "[CC1] a\xe2\x96\x88"));
+
+    /* XDS helper: a packet of class/type with data, with its checksum */
+    #define XDS(cls, type, ...) do { \
+        uint8_t d_[] = { (uint8_t)(cls), (uint8_t)(type), __VA_ARGS__, 0x00, 0x0f }; \
+        int n_ = (int)sizeof(d_), sum_ = 0; \
+        for (int i_ = 0; i_ < n_; i_++) sum_ += d_[i_]; \
+        uint8_t ck_ = (uint8_t)((128 - (sum_ & 0x7f)) & 0x7f); \
+        for (int i_ = 0; i_ + 1 < n_ - 1; i_ += 2) pair(c, 1, d_[i_], d_[i_ + 1]); \
+        pair(c, 1, 0x0f, ck_); } while (0)
+
+    /* TV-14 with violence and language: char 1 = 0x48 (a0 = 1), char 2 = 0x40|V|L|g=5 */
+    nlog = 0;
+    XDS(0x01, 0x05, 0x48, 0x40 | 0x20 | 0x08 | 5);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "XDS: Rating: TV-14 Violence Adult Language"));
+    /* MPA R */
+    nlog = 0;
+    XDS(0x01, 0x05, 0x44, 0x40);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "XDS: Rating: MPA R"));
+    /* Canadian English PG: a1 a0 = 1 1, a3 a2 = 0 0, g = 4 */
+    nlog = 0;
+    XDS(0x01, 0x05, 0x58, 0x44);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "XDS: Rating: Canada PG"));
+    /* time of day: 21:05, 24 November 2026 (UTC), Tuesday */
+    nlog = 0;
+    XDS(0x07, 0x01, 0x40 | 5, 0x40 | 21, 0x40 | 24, 0x40 | 11, 0x40 | 3, 0x40 | 36);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "XDS: Time of day (UTC): 21:05 Nov 24 2026, Tue"));
+    /* time zone: UTC-5 observing daylight saving */
+    nlog = 0;
+    XDS(0x07, 0x04, 0x40 | 0x20 | 5);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "XDS: Time zone: UTC-5 (observes daylight saving)"));
+    /* audio: English stereo, Spanish video descriptions */
+    nlog = 0;
+    XDS(0x01, 0x06, 0x40 | (1 << 3) | 3, 0x40 | (2 << 3) | 2);
+    CHECK(nlog == 1 && !strcmp(logbuf[0], "XDS: Audio: main English (Stereo), second Spanish (Video descriptions)"));
     cc608_free(c);
     if (fails) {
         printf("%d failures\n", fails);
